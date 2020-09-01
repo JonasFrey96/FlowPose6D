@@ -90,7 +90,7 @@ class Visualizer():
         """
         rot_mat = np.array(rot_mat)
         trans = np.array(trans)
-        img_f = copy.deepcopy(img).numpy().astype(np.uint8)
+        img_f = copy.deepcopy(img).astype(np.uint8)
         points = np.dot(points, rot_mat.T)
         points = np.add(points, trans[0, :])
         h = img_f.shape[0]
@@ -112,7 +112,7 @@ class Visualizer():
 
         kernel = np.ones((a * 2, a * 2, 1), np.uint8)
         erosion = cv2.erode(acc_array, kernel, iterations=1)
-        image, contours, hierarchy = cv2.findContours(
+        contours, hierarchy = cv2.findContours(
             np.expand_dims(erosion, 2), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         out = np.zeros((h, w, 3), dtype=np.uint8)
         cv2.drawContours(out, contours, -1, (0, 255, 0), 3)

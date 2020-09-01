@@ -39,7 +39,7 @@ time = '3:59' # '23:59'
 
 os.makedirs(f'{save_dir}/{folder_name}', exist_ok=True)
 #lr = np.linspace(start=0.005, stop=0.00001, num=6).tolist()
-ls_lr = np.logspace(start=-4, stop=-6, num=3,base=10).tolist()
+ls_lr = np.logspace(start=-6, stop=-8, num=3,base=10).tolist()
 
 i = [0]
 def send(i,tag,data):
