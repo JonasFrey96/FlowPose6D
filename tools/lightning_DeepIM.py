@@ -9,6 +9,7 @@ import time
 import shutil
 import argparse
 import logging
+import signal
 
 # misc
 import numpy as np
@@ -234,9 +235,11 @@ class TrackNet6D(LightningModule):
 
         self.test_size = 0.9
         self.env, self.exp = env, exp
-
-        restore_deepim_refiner = '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar'
-
+        restore_deepim_refiner = self.exp.get(
+            'restore_deepim_refiner', '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar')
+        print('Selected GPU: ', torch.cuda.device_count())
+        for i in range(0, int(torch.cuda.device_count())):
+            print(f'GPU {i} Type {torch.cuda.get_device_name(i)}')
         self.refiner = DeepIM.from_weights(
             21, restore_deepim_refiner)
 
@@ -706,10 +709,55 @@ def file_path(string):
     else:
         raise NotADirectoryError(string)
 
+def move_dataset_to_ssd(env, exp):
+    try:
+        # Update the env for the model when copying dataset to ssd
+        if env.get('leonhard', {}).get('copy', False):
+            files = ['data', 'data_syn', 'models', 'viewpoints_renderings']
+            p_ls = os.popen('echo $TMPDIR').read().replace('\n', '')
+            p_ycb_new = p_ls + '/YCB_Video_Dataset'
+            p_ycb = env['p_ycb']
+            print(p_ls)
+            try:
+                os.mkdir(p_ycb_new)
+            except:
+                pass
+            for f in files:
+
+                p_file_tar = f'{p_ycb}/{f}.tar'
+                logging.info(f'Copying {f} to {p_ycb_new}/{f}')
+
+                if os.path.exists(f'{p_ycb_new}/{f}'):
+                    logging.info(
+                        "data already exists! Interactive session?")
+                else:
+                    start_time = time.time()
+                    bashCommand = "tar -xvf" + p_file_tar + \
+                        " -C $TMPDIR/YCB_Video_Dataset | awk 'BEGIN {ORS=\" \"} {if(NR%1000==0)print NR}\' "
+                    os.system(bashCommand)
+                    logging.info(
+                        f'Transferred {f} folder within {str(time.time() - start_time)}s to local SSD')
+
+            env['p_ycb'] = p_ycb_new
+    except:
+        env['p_ycb'] = p_ycb_new
+        logging.info('Copying data failed')
+    return exp, env
+    
+
 
 if __name__ == "__main__":
     # for reproducability
     seed_everything(42)
+
+    def signal_handler(signal, frame):
+        print('exiting on CRTL-C')
+        sys.exit(0)
+
+    # this is needed for leonhard to use interactive session and dont freeze on
+    # control-C !!!!
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim.yml',  # required=True,
@@ -751,7 +799,10 @@ if __name__ == "__main__":
     shutil.copy(exp_cfg_path, f'{model_path}/{exp_cfg_fn}')
     shutil.copy(env_cfg_path, f'{model_path}/{env_cfg_fn}')
 
+    exp, env = move_dataset_to_ssd(env, exp)
     dic = {'exp': exp, 'env': env}
+
+    
     model = TrackNet6D(**dic)
 
     # default used by the Trainer
@@ -781,7 +832,7 @@ if __name__ == "__main__":
         model.load_state_dict(checkpoint['state_dict'])
 
     with torch.autograd.set_detect_anomaly(True):
-        trainer = Trainer(gpus=1,
+        trainer = Trainer(gpus=env.get('leonhard',{}).get('max_gpus',-1),
                           num_nodes=1,
                           auto_lr_find=False,
                           accumulate_grad_batches=exp['training']['accumulate_grad_batches'],

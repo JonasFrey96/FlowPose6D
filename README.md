@@ -43,7 +43,33 @@ Setting up global variables:
 Got to:
 `yaml/env/env_ws.yml`
 and edit the following pathts:
-TODO
+
+
+
+#### Leonhard Usefull Commands:
+```
+conda activate track2
+
+du -sh
+conda env export --name machine_perception > machine_perception.yml
+tar -cvf data_syn.tar ./data_syn
+
+
+bsub -Is -n 20 -W 3:59 -R "rusage[mem=4500,ngpus_excl_p=8]" -R "rusage[scratch=20000]" bash
+
+# 400 gb scratch
+bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=4]" -R "rusage[scratch=25000]" bash
+
+module load eth_proxy python_gpu/3.7.7 gcc/6.3.0
+python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_yash.yml
+/cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python --env=yaml/env/env_leonhard_yash.yml
+
+ cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml
+
+bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=25000]" ~/PLR2/scripts/lightning.sh
+
+```
+
 
 ### Lightning Module:
 
