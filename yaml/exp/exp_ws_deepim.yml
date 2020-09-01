@@ -5,7 +5,6 @@ refiner_restore: false
 refiner_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
 restore_deepim_refiner: "/cluster/work/riner/users/PLR-2020/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
-
 mail: false
 model_mode: fit
 
@@ -21,9 +20,7 @@ lr_cfg:
 
 vm:
   nr_of_images_per_object: 500
-  load: True
-
-
+  load_images: True
 
 training:
   accumulate_grad_batches: 1
@@ -52,8 +49,8 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 10
-  workers: 4
+  batch_size: 16
+  workers: 20
 
 d_test:
   name: "ycb"

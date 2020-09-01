@@ -22,3 +22,5 @@ lib/knn/knn_pytorch/*.so
 lig/knn/*.egg-info
 .vscode/settings.json
 scripts/viewpoint_manager.ipynb
+yaml/auto*
+

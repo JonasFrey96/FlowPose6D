@@ -60,16 +60,21 @@ bsub -Is -n 20 -W 3:59 -R "rusage[mem=4500,ngpus_excl_p=8]" -R "rusage[scratch=2
 # 400 gb scratch
 bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=4]" -R "rusage[scratch=25000]" bash
 
+bsub -Is -n 20 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "rusage[scratch=20000]" bash
+
 module load eth_proxy python_gpu/3.7.7 gcc/6.3.0
 python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_yash.yml
 /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python --env=yaml/env/env_leonhard_yash.yml
 
- cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml
+cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml
 
 bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=25000]" ~/PLR2/scripts/lightning.sh
 
-```
 
+
+```
+Starting Tensorboard:
+``` ./scripts/leonhard/start_tensorboard.sh deep_im ```
 
 ### Lightning Module:
 

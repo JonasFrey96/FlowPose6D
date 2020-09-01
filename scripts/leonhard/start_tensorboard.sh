@@ -1,0 +1,1 @@
+tensorboard --logdir=/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/$@ --host=0.0.0.0 --port=8084

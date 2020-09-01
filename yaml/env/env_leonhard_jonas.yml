@@ -1,0 +1,22 @@
+device: "cuda"
+
+# in repo (dont touch)
+p_ycb_dense_test: "datasets/ycb/dataset_config/test_data_list.txt"
+p_ycb_dense_train: "datasets/ycb/dataset_config/train_data_list.txt"
+p_ycb_seq_test: "datasets/ycb/dataset_config/test_data_list_seq.txt"
+p_ycb_seq_train: "datasets/ycb/dataset_config/train_data_list_seq.txt"
+p_ycb_seq_train_inc_syn: "datasets/ycb/dataset_config/train_data_list_seq_inc_syn.txt"
+p_ycb_syn: "datasets/ycb/dataset_config/data_syn.txt"
+p_ycb_obj: "datasets/ycb/dataset_config/classes.txt"
+
+# external
+
+p_ycb: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/ycb/YCB_Video_Dataset"
+p_ycb_lookup_desig_to_obj: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/config/desig_obj_list.npy"
+p_ycb_config: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/config"
+p_config: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/config/"
+
+# just needed on leonhard
+leonhard:
+  copy: true
+  max_gpus: -1

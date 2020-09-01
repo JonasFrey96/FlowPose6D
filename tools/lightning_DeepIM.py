@@ -11,6 +11,7 @@ import argparse
 import logging
 import signal
 
+
 # misc
 import numpy as np
 import pandas as pd
@@ -269,6 +270,12 @@ class TrackNet6D(LightningModule):
         self.counter_images_logged = 0
 
         self.init_train_vali_split = False
+        mp= exp['model_path']
+        fh = logging.FileHandler(f'{mp}/Live_Logger_Lightning.log')
+        fh.setLevel(logging.DEBUG)
+        
+        logging.getLogger("lightning").addHandler(fh)
+        
 
     def forward(self, batch):
 
@@ -407,7 +414,7 @@ class TrackNet6D(LightningModule):
             # delta_t can be used for bookkeeping to keep track of the translation
 
             # limit delta_t to be within 10cm
-            val = exp.get('training', {}).get('clamp_delta_t_pred', 0.1)
+            val = self.exp.get('training', {}).get('clamp_delta_t_pred', 0.1)
             delta_t_clamp = torch.clamp(delta_t, -val, val)
 
             pred_trans = pred_trans + delta_t_clamp
@@ -436,7 +443,7 @@ class TrackNet6D(LightningModule):
 
         st = time.time()
         dis, _, _ = self(batch[0])
-        loss = torch.sum(dis)
+        loss = torch.sum(dis)/batch[0][0].shape[0]
         # for epoch average logging
         try:
             self._dict_track['train_loss'].append(float(loss))
@@ -455,7 +462,7 @@ class TrackNet6D(LightningModule):
 
         st = time.time()
         dis, pred_r, pred_t = self(batch[0])
-        loss = torch.sum(dis)
+        loss = torch.sum(dis)/batch[0][0].shape[0]
 
         if self.counter_images_logged < self.number_images_log_val:
             self.visu_forward = True
@@ -476,7 +483,7 @@ class TrackNet6D(LightningModule):
         tensorboard_logs = {'val_loss': float(loss)}
         val_loss = loss
         val_dis = loss
-        return {'val_loss': val_loss, 'val_dis': val_dis}
+        return {'val_loss': val_loss, 'val_dis': val_dis, , 'log': tensorboard_logs}
 
     def validation_epoch_end(self, outputs):
         self.visu_forward = False
@@ -491,8 +498,10 @@ class TrackNet6D(LightningModule):
 
         self.counter_images_logged = 0  # reset image log counter
 
-        avg_val_dis_float = 1
-        return {'avg_val_dis_float': avg_val_dis_float, 'log': avg_dict}
+        avg_val_dis_float = float(avg_dict['avg_val_loss']) 
+        return {'avg_val_dis_float': avg_val_dis_float, 
+                'avg_val_dis': avg_dict['avg_val_loss'], 
+                'log': avg_dict}
 
     def train_epoch_end(self, outputs):
         self.visu_forward = False
@@ -564,7 +573,7 @@ class TrackNet6D(LightningModule):
 
     def visu_pose(self, batch_idx, pred_r, pred_t, target, model_points, cam, img_orig, unique_desig, idx, store=True):
         if self.Visu is None:
-            self.Visu = Visualizer(exp['model_path'] +
+            self.Visu = Visualizer(self.exp['model_path'] +
                                    '/visu/', self.logger.experiment)
 
         points = copy.deepcopy(target.detach().cpu().numpy())
@@ -782,9 +791,9 @@ if __name__ == "__main__":
     new_path = '/'.join(p)
     exp['model_path'] = new_path
     model_path = exp['model_path']
-
+    
+    
     logger = logging.getLogger('TrackNet')
-
     # copy config files to model path
     if not os.path.exists(model_path):
         os.makedirs(model_path)
@@ -801,12 +810,11 @@ if __name__ == "__main__":
 
     exp, env = move_dataset_to_ssd(env, exp)
     dic = {'exp': exp, 'env': env}
-
     
     model = TrackNet6D(**dic)
 
     # default used by the Trainer
-    # TODO create one early stopping callback
+    # TODO create early stopping callback
     # https://github.com/PyTorchLightning/pytorch-lightning/blob/63bd0582e35ad865c1f07f61975456f65de0f41f/pytorch_lightning/callbacks/base.py#L12
     early_stop_callback = EarlyStopping(
         monitor='avg_val_dis_float',
@@ -818,9 +826,9 @@ if __name__ == "__main__":
 
     # DEFAULTS used by the Trainer
     checkpoint_callback = ModelCheckpoint(
-        filepath=exp['model_path'] + '/{epoch}-{avg_val_dis:.4f}',
+        filepath=exp['model_path'] + '/{epoch}-{avg_val_dis_float:.4f}',
         verbose=True,
-        monitor="avg_val_dis",
+        monitor="avg_val_loss",
         mode="min",
         prefix="",
         save_last=True,
@@ -840,8 +848,8 @@ if __name__ == "__main__":
                           checkpoint_callback=checkpoint_callback,
                           early_stop_callback=early_stop_callback,
                           fast_dev_run=False,
-                          limit_train_batches=100,
-                          limit_val_batches=100,
+                          limit_train_batches=10,
+                          limit_val_batches=10,
                           limit_test_batches=1.0,
                           val_check_interval=1.0,
                           progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],

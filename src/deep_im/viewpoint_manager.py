@@ -108,11 +108,13 @@ class ViewpointManager():
         Given that the poses are rendered at random no random selection or smarter selection is necessary. 
         """
         ls = glob.glob(f'{self.store}/*/*color.png')
+        ls.sort(key=lambda x:  x.split('/')[-2] + '0'*int(20-len(x.split('/')[-1])) + x.split('/')[-1] ) 
+        
         self.lookup = {}
         print('Loading all rendered images. This might take a minute')
         added = 0
         obj_counter = {}
-
+        st = time.time()
         for i in self.name_to_idx.keys():
             obj_counter[i] = 0
 
@@ -133,7 +135,7 @@ class ViewpointManager():
                     self.lookup[idx] = (img, d)
 
         self.filter_pose_dict()
-        print('Loaded all Images for ViewpointManger')
+        print(f'Loaded {len(self.lookup)} Images in {time.time()-st}s for ViewpointManger into RAM')
 
     def filter_pose_dict(self):
         # filter out all images in the pose dict that are not actualy used and loaded in the lookup dict.
@@ -227,7 +229,7 @@ class ViewpointManager():
             best_match = int(best_match_idx[j])
             obj = self.idx_to_name[i[0]]
             if self.load_images:
-                img, depth = self.lookup[f'{self.store}/{obj}/{idx_argmin}']
+                img, depth = self.lookup[f'{obj}/{best_match}']
                 imgls[j, :, :, :] = torch.from_numpy(img.astype(np.float32))
                 depls[j, :, :] = torch.from_numpy(depth)
             else:
