@@ -1,12 +1,12 @@
-model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/deep_im/debug"
+model_path: "/media/scratch1/jonfrey/models/runs/deep_im/debug"
 estimator_restore: true
-estimator_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
+estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
-refiner_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
-restore_deepim_refiner: "/cluster/work/riner/users/PLR-2020/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
+refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
+restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
 mail: false
-model_mode: fit
+model_mode: test
 
 epochs: 500
 lr: 1.0e-07
@@ -21,6 +21,9 @@ lr_cfg:
 vm:
   nr_of_images_per_object: 500
   load_images: True
+  
+eval:
+  threshold_add: 0.02
 
 training:
   accumulate_grad_batches: 1

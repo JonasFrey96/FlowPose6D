@@ -1,0 +1,133 @@
+model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/deep_im/debug"
+estimator_restore: true
+estimator_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
+refiner_restore: false
+refiner_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
+restore_deepim_refiner: "/cluster/work/riner/users/PLR-2020/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
+
+mail: false
+model_mode: test
+
+epochs: 500
+lr: 1.0e-07
+lr_cfg:
+  on_plateau_cfg:
+    mode: "min"
+    factor: 0.3
+    threshold: 0.02
+  interval: "epoch"
+  frequency: 1
+
+vm:
+  nr_of_images_per_object: 500
+  load_images: True
+  
+eval:
+  threshold_add: 0.02
+
+training:
+  accumulate_grad_batches: 1
+  progress_bar_refresh_rate: 1
+  translation_noise_inital: 0.03
+  refine_iterations: 1
+  refine_iterations_range: 0 # iteareatioons elemen refine_iterations +- refine_iterations_range
+  max_epochs: 100
+  clamp_delta_t_pred: 0.1
+  trans_deviation_resample_inital_pose: 0.3
+  limit_train_batches: 10
+  limit_val_batches: 10
+
+
+visu:
+  number_images_log_test: 1
+  number_images_log_val: 1
+  network_input_batch: False
+
+early_stopping_cfg:
+  patience: 100
+
+w_normal: 0.015
+w_normal_rate: 0.3
+
+decay_margin_start: 0.016
+samples_early_break_epoch: 5000000
+time_early_break_epoch: 10
+samples_early_break_validation: 100000
+time_early_break_validation: 10
+
+loader:
+  batch_size: 16
+  workers: 20
+
+d_test:
+  name: "ycb"
+  objects: 21
+  num_points: 1000
+  num_pt_mesh_small: 2000
+  num_pt_mesh_large: 2300
+  obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general
+    - 1
+    - 2
+  obj_list_sym:
+    - 12
+    - 15
+    - 18
+    - 19
+    - 20
+  batch_list_cfg:
+    sequence_names: null #either null or what name should be in the sequence for example to only plot hard interactions
+    seq_length: 1
+    fixed_length: true
+    sub_sample: 1
+    mode: "test" #dense_fusion_test
+    add_syn_to_train: false
+  noise_cfg:
+    status: false
+    noise_trans: 0.0
+  output_cfg:
+    return_same_size_tensors: true
+    force_one_object_visible: true
+    status: false
+    refine: false
+    add_depth_image: true
+    add_mask_image: true
+    visu:
+      status: true
+      return_img: true
+
+d_train:
+  name: "ycb"
+  objects: 21
+  num_points: 1000
+  num_pt_mesh_small: 2000
+  num_pt_mesh_large: 2300
+  obj_list_fil: # if not null add list with specific elements
+    - 1
+    - 2
+  obj_list_sym:
+    - 12
+    - 15
+    - 18
+    - 19
+    - 20
+  batch_list_cfg:
+    sequence_names: null #either null or what name should be in the sequence for example to only plot hard interactions
+    seq_length: 1
+    no_list_for_sequence_len_one: True
+    fixed_length: true
+    sub_sample: 1
+    mode: "train"
+    add_syn_to_train: true
+  noise_cfg:
+    status: false
+    noise_trans: 0
+  output_cfg:
+    return_same_size_tensors: true
+    force_one_object_visible: true
+    status: false
+    refine: false
+    add_depth_image: true
+    add_mask_image: true
+    visu:
+      status: true
+      return_img: true

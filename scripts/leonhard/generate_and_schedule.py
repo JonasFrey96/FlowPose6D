@@ -12,7 +12,7 @@ import shutil
 
 ### edit this path
 plr_path = "/cluster/home/jonfrey/PLR3"
-template_path =plr_path + '/yaml/exp/exp_ws_deepim.yml'
+template_path =plr_path + '/yaml/exp/exp_ws_deepim_leon.yml'
 save_dir = plr_path+'/yaml/auto'
 model_base_path = '/cluster/work/riner/users/PLR-2020/jonfrey/models/runs'
 #pruge ansible folder first
@@ -62,19 +62,3 @@ for job in jobs:
   arg = f' --env=yaml/env/env_leonhard_jonas.yml --exp {exp}'
   print("Send command: ", bsub+arg, "\n \n")
   os.system(bsub+arg)
-
-"""
-#create path file 
-store = {'jobs':jobs}
-with open(experiment_file, 'w') as f:
-	yaml.dump(store, f)
-
-print ("\n \n Submitting %d Jobs, Host: %s, Folder: %s"%(i[0],host , data['tensorboard_path']) )
-#send jobs to cluster via ansible
-
-if host == 'jonas':
-	bashCommand = "cd "+  plr_path + " && sudo ansible-playbook scripts/ansible_auto/ansible_auto.yml"
-elif  host == 'yash':
-	bashCommand = "cd "+  plr_path + " && sudo ansible-playbook scripts/ansible_auto/ansible_auto_yash.yml"
-os.system(bashCommand)
-"""

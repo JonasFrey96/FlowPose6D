@@ -378,12 +378,21 @@ class TrackNet6D(LightningModule):
 
         st = time.time()
         dis, _, _ = self(batch[0])
+
+        # aggregate statistics per object (ADD-S sym and ADD non sym)
+        _bs = batch[0][0].shape[0]
+        thr = self.exp.get('eval',{}).get('threshold_add',0.02)
+        within_add = torch.ge(torch.tensor( [thr]*_bs)  ,dis) # check if smaller ADD / ADD-s < 2cm
+        
         loss = torch.sum(dis)/batch[0][0].shape[0]
         # for epoch average logging
         try:
             self._dict_track['train_loss'].append(float(loss))
+            self._dict_track[f'train_adds_acc'].append(
+                torch.mean(within_add.type(torch.float32)) )
         except:
             self._dict_track['train_loss'] = [float(loss)]
+            self._dict_track[f'train_adds_acc'] = [torch.mean(within_add.type(torch.float32)) )]
 
         # tensorboard logging
         tensorboard_logs = {'train_loss': float(loss)}
@@ -394,9 +403,16 @@ class TrackNet6D(LightningModule):
     def validation_step(self, batch, batch_idx):
         total_loss = 0
         total_dis = 0
+        
 
         st = time.time()
         dis, pred_r, pred_t = self(batch[0])
+        
+        # aggregate statistics per object (ADD-S sym and ADD non sym)
+        _bs = batch[0][0].shape[0]
+        thr = self.exp.get('eval',{}).get('threshold_add',0.02)
+        within_add = torch.ge(torch.tensor( [thr]*_bs)  ,dis) # check if smaller ADD / ADD-s < 2cm
+
         loss = torch.sum(dis)/batch[0][0].shape[0]
 
         if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_val', 1):
@@ -410,15 +426,76 @@ class TrackNet6D(LightningModule):
             # for epoch average logging
         else:
             self.visu_forward = False
+
+
         try:
             self._dict_track['val_loss'].append(float(loss))
+            self._dict_track[f'val_adds_acc'].append(
+                torch.mean(within_add.type(torch.float32)) )
         except:
             self._dict_track['val_loss'] = [float(loss)]
+            self._dict_track[f'val_adds_acc'] = [ torch.mean(within_add.type(torch.float32)) )]
 
         tensorboard_logs = {'val_loss': float(loss)}
         val_loss = loss
         val_dis = loss
         return {'val_loss': val_loss, 'val_dis': val_dis, 'log': tensorboard_logs}
+
+    def test_step(self, batch, batch_idx):
+
+        _bs = batch[0][0].shape[0]
+        # forward pass
+        dis, pred_r, pred_t = self(batch[0])
+
+        # visualization
+        if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_test', 1):
+            self.visu_forward = True
+            self.counter_images_logged += 1
+            points, choose, img, target, model_points, idx = batch[0][0:6]
+            depth_img, label_img, img_orig, cam = batch[0][6:10]
+            gt_rot_wxyz, gt_trans, unique_desig = batch[0][10:13]
+            self.visu_pose(batch_idx, pred_r[0], pred_t[0],
+                           target[0], model_points[0], cam[0], img_orig[0], unique_desig, idx[0])
+        else:
+            self.visu_forward = False
+        
+        # aggregate statistics per object (ADD-S sym and ADD non sym)
+        thr = self.exp.get('eval',{}).get('threshold_add',0.02)
+        within_add = torch.ge(torch.tensor( [thr]*_bs)  ,dis) # check if smaller ADD / ADD-s < 2cm
+        loss = torch.sum(dis)/_bs # calc mean over full batch
+
+        if f'test_loss' in self._dict_track.keys():
+            self._dict_track[f'test_loss'].append(
+                float(loss))
+            self._dict_track[f'test_adds_acc'].append(
+                torch.mean(within_add.type(torch.float32)) )
+            
+        else:
+            self._dict_track[f'test_loss'] = [float(loss)]
+            self._dict_track[f'test_adds_acc'] = [
+                torch.mean(within_add.type(torch.float32)) ]
+
+        for i in range(0,_bs):
+          # object loss for each object
+          if f'test_{int(unique_desig[i,1])}_loss' in self._dict_track.keys():
+              self._dict_track[f'test_{int(unique_desig[i,1])}_loss'].append(
+                  float(dis[i]))
+              self._dict_track[f'test_{int(unique_desig[i,1])}_adds_acc'].append( 
+                  float(within_add[i]) )
+
+              print("Appended new list ele " + f'test_{int(unique_desig[i,1])}_loss')
+          else:
+              self._dict_track[f'test_{int(unique_desig[i,1])}_loss'] = [
+                  float(dis[i])]
+              self._dict_track[f'test_{int(unique_desig[i,1])}_adds_acc'] = [
+                  float(within_add[i])]          
+
+              print("Added new list ele " + f'test_{int(unique_desig[i,1])}_loss')
+
+        # TODO add ADD < 2cm implementaiton here ! 
+
+        tensorboard_logs = {'test_loss': test_loss}
+        return {**tensorboard_logs, 'log': tensorboard_logs}
 
     def validation_epoch_end(self, outputs):
         self.visu_forward = False
@@ -451,60 +528,18 @@ class TrackNet6D(LightningModule):
         return {
             **avg_dict, 'log': avg_dict}
 
-    def visu(self,
-             batch_idx,
-             pred_r,
-             pred_t,
-             pred_c,
-             points,
-             target,
-             model_points,
-             cam,
-             img_orig,
-             unique_desig,
-             store=True):
-        if self.Visu is None:
-            self.Visu = Visualizer(exp['model_path'] +
-                                   '/visu/', self.logger.experiment)
-        self.Visu.plot_estimated_pose(tag='ground_truth_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                      epoch=self.current_epoch,
-                                      img=img_orig[0, :, :,
-                                                   :].detach().cpu().numpy(),
-                                      points=copy.deepcopy(
-            target[0, :, :].detach().cpu().numpy()),
-            trans=np.array([[0, 0, 0]]),
-            rot_mat=np.diag((1, 1, 1)),
-            cam_cx=float(cam[0, 0]),
-            cam_cy=float(cam[0, 1]),
-            cam_fx=float(cam[0, 2]),
-            cam_fy=float(cam[0, 3]),
-            store=store)
-        # extract highest confident vote
-        how_max, which_max = torch.max(pred_c, 1)
-        div = (torch.norm(pred_r, dim=2).view(1, 1000, 1))
-        pred_r = (-1) * pred_r / div
+    def test_epoch_end(self, outputs):
+        self.visu_forward = False
+        avg_dict = {}
+        for old_key in list(self._dict_track.keys()):
+            if old_key.find('test') == -1:
+                continue
+            avg_dict['avg_' +
+                     old_key] = float(np.mean(np.array(self._dict_track[old_key])))
+            self._dict_track.pop(old_key, None)
 
-        c = how_max.detach()
-        t = (pred_t[0, int(which_max), :] +
-             points[0, int(which_max), :]).detach().cpu().numpy()
-        r = pred_r[0, int(which_max), :].detach().cpu().numpy()
-
-        rot = R.from_quat(re_quat(r, 'wxyz'))
-
-        self.Visu.plot_estimated_pose(tag='final_prediction_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                      epoch=self.current_epoch,
-                                      img=img_orig[0, :, :,
-                                                   :].detach().cpu().numpy(),
-                                      points=copy.deepcopy(
-                                          model_points[0, :, :].detach(
-                                          ).cpu().numpy()),
-                                      trans=t.reshape((1, 3)),
-                                      rot_mat=rot.as_matrix(),
-                                      cam_cx=float(cam[0, 0]),
-                                      cam_cy=float(cam[0, 1]),
-                                      cam_fx=float(cam[0, 2]),
-                                      cam_fy=float(cam[0, 3]),
-                                      store=store)
+        return {
+            **avg_dict, 'log': avg_dict}
 
     def visu_pose(self, batch_idx, pred_r, pred_t, target, model_points, cam, img_orig, unique_desig, idx, store=True):
         if self.Visu is None:
@@ -620,17 +655,26 @@ class TrackNet6D(LightningModule):
 
         return dataloader_train
 
-    # def test_dataloader(self):
-    #     dataset_test = GenericDataset(
-    #         cfg_d=self.exp['d_test'],
-    #         cfg_env=self.env)
+    def test_dataloader(self):
+        dataset_test = GenericDataset(
+              cfg_d=self.exp['d_test'],
+              cfg_env=self.env)
+        store = self.env['p_ycb'] + '/viewpoints_renderings'
+        if self.vm is None:
+            self.vm = ViewpointManager(
+                store=store,
+                name_to_idx=dataset_test._backend._name_to_idx,
+                nr_of_images_per_object=self.exp.get(
+                    'vm', {}).get('nr_of_images_per_object', 1000),
+                device=self.device,
+                load_images=self.exp.get('vm', {}).get('load_images', False))
 
-    #     dataloader_test = torch.utils.data.DataLoader(dataset_test,
-    #                                                   batch_size=self.exp['loader']['batch_size'],
-    #                                                   shuffle=False,
-    #                                                   num_workers=self.exp['loader']['workers'],
-    #                                                   pin_memory=True)
-    #     return dataloader_test
+        dataloader_test = torch.utils.data.DataLoader(dataset_test,
+                                                        batch_size=self.exp['loader']['batch_size'],
+                                                        shuffle=False,
+                                                        num_workers=self.exp['loader']['workers'],
+                                                        pin_memory=True)
+        return dataloader_test
 
     def val_dataloader(self):
         dataset_val = GenericDataset(
@@ -720,7 +764,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim.yml',  # required=True,
+    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim_leon.yml',  # required=True,
                         help='The main experiment yaml file.')
     parser.add_argument('--env', type=file_path, default='yaml/env/env_natrix_jonas.yml',
                         help='The environment yaml file.')
