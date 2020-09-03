@@ -1,18 +1,15 @@
-model_path: "/media/scratch1/jonfrey/models/runs/deep_im/debug"
+model_path: "/media/scratch1/jonfrey/models/runs/deep_im/2_obj_train"
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
 refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
 restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
-
-
-
 mail: false
 model_mode: fit
 
 epochs: 500
-lr: 1.0e-07
+lr: 1.0e-06
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -37,9 +34,8 @@ training:
   max_epochs: 100
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 5000
-  limit_val_batches: 500
-
+  limit_train_batches: 2000
+  limit_val_batches: 200
 
 visu:
   number_images_log_test: 1
@@ -47,7 +43,7 @@ visu:
   network_input_batch: False
 
 early_stopping_cfg:
-  patience: 100
+  patience: 5
 
 w_normal: 0.015
 w_normal_rate: 0.3
@@ -60,7 +56,7 @@ time_early_break_validation: 10
 
 loader:
   batch_size: 16
-  workers: 20
+  workers: 6
 
 d_test:
   name: "ycb"

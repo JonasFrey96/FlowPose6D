@@ -112,8 +112,13 @@ class Visualizer():
 
         kernel = np.ones((a * 2, a * 2, 1), np.uint8)
         erosion = cv2.erode(acc_array, kernel, iterations=1)
-        contours, hierarchy = cv2.findContours(
-            np.expand_dims(erosion, 2), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+        try:  # problem cause by different cv2 version > 4.0
+            contours, hierarchy = cv2.findContours(
+                np.expand_dims(erosion, 2), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        except:  # version < 4.0
+            _, contours, hierarchy = cv2.findContours(
+                np.expand_dims(erosion, 2), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         out = np.zeros((h, w, 3), dtype=np.uint8)
         cv2.drawContours(out, contours, -1, (0, 255, 0), 3)
 

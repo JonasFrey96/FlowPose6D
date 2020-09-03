@@ -39,11 +39,11 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 coloredlogs.install()
 
 # network dense fusion
-#from lib.loss import Loss
-#from lib.loss_refiner import Loss_refine
-#from lib.network import PoseNet, PoseRefineNet
-#from lib.motion_network import MotionNetwork
-#from lib.motion_loss import motion_loss
+# from lib.loss import Loss
+# from lib.loss_refiner import Loss_refine
+# from lib.network import PoseNet, PoseRefineNet
+# from lib.motion_network import MotionNetwork
+# from lib.motion_loss import motion_loss
 # dataset
 from loaders_v2 import GenericDataset
 from visu import Visualizer
@@ -127,6 +127,7 @@ def plt_torch(data, name='torch.png', folder='/home/jonfrey/Debug'):
     plt.axis("off")
     plt.savefig(folder + '/' + name)
 
+
 def get_bb_real_target(target, cam, gt_trans):
     bb_ls = []
     # ret = backproject_points_batch(
@@ -182,7 +183,7 @@ class TrackNet6D(LightningModule):
             21, restore_deepim_refiner)
 
         num_poi = exp['d_train']['num_pt_mesh_small']
-        #self.criterion = Loss(num_poi, exp['d_train']['obj_list_sym'])
+        # self.criterion = Loss(num_poi, exp['d_train']['obj_list_sym'])
         num_poi = exp['d_train']['num_pt_mesh_large']
         # self.criterion_refine = Loss_refine(
         #    num_poi, exp['d_train']['obj_list_sym'])
@@ -205,12 +206,11 @@ class TrackNet6D(LightningModule):
         self.counter_images_logged = 0
 
         self.init_train_vali_split = False
-        mp= exp['model_path']
+        mp = exp['model_path']
         fh = logging.FileHandler(f'{mp}/Live_Logger_Lightning.log')
         fh.setLevel(logging.DEBUG)
-        
+
         logging.getLogger("lightning").addHandler(fh)
-        
 
     def forward(self, batch):
 
@@ -316,7 +316,7 @@ class TrackNet6D(LightningModule):
             # stack the two images, might add additional mask as layer or depth info
             data = torch.cat([real_img, render_img], dim=1)
 
-            if self.visu_forward and self.exp.get('visu',{}).get('network_input_batch',False):
+            if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
                 self.Visu.visu_network_input(tag="network_input",
                                              epoch=self.current_epoch,
                                              data=data,
@@ -381,18 +381,21 @@ class TrackNet6D(LightningModule):
 
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         _bs = batch[0][0].shape[0]
-        thr = self.exp.get('eval',{}).get('threshold_add',0.02)
-        within_add = torch.ge(torch.tensor( [thr]*_bs)  ,dis) # check if smaller ADD / ADD-s < 2cm
-        
-        loss = torch.sum(dis)/batch[0][0].shape[0]
+        thr = self.exp.get('eval', {}).get('threshold_add', 0.02)
+        # check if smaller ADD / ADD-s < 2cm
+        within_add = torch.ge(torch.tensor(
+            [thr] * _bs, device=self.device), dis)
+
+        loss = torch.sum(dis) / batch[0][0].shape[0]
         # for epoch average logging
         try:
             self._dict_track['train_loss'].append(float(loss))
             self._dict_track[f'train_adds_acc'].append(
-                torch.mean(within_add.type(torch.float32)) )
+                float(torch.mean(within_add.type(torch.float32))))
         except:
             self._dict_track['train_loss'] = [float(loss)]
-            self._dict_track[f'train_adds_acc'] = [torch.mean(within_add.type(torch.float32)) )]
+            self._dict_track[f'train_adds_acc'] = [
+                float(torch.mean(within_add.type(torch.float32)))]
 
         # tensorboard logging
         tensorboard_logs = {'train_loss': float(loss)}
@@ -403,17 +406,18 @@ class TrackNet6D(LightningModule):
     def validation_step(self, batch, batch_idx):
         total_loss = 0
         total_dis = 0
-        
 
         st = time.time()
         dis, pred_r, pred_t = self(batch[0])
-        
+
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         _bs = batch[0][0].shape[0]
-        thr = self.exp.get('eval',{}).get('threshold_add',0.02)
-        within_add = torch.ge(torch.tensor( [thr]*_bs)  ,dis) # check if smaller ADD / ADD-s < 2cm
+        thr = self.exp.get('eval', {}).get('threshold_add', 0.02)
+        # check if smaller ADD / ADD-s < 2cm
+        within_add = torch.ge(torch.tensor(
+            [thr] * _bs, device=self.device), dis)
 
-        loss = torch.sum(dis)/batch[0][0].shape[0]
+        loss = torch.sum(dis) / batch[0][0].shape[0]
 
         if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_val', 1):
             self.visu_forward = True
@@ -427,14 +431,14 @@ class TrackNet6D(LightningModule):
         else:
             self.visu_forward = False
 
-
         try:
             self._dict_track['val_loss'].append(float(loss))
             self._dict_track[f'val_adds_acc'].append(
-                torch.mean(within_add.type(torch.float32)) )
+                float(torch.mean(within_add.type(torch.float32))))
         except:
             self._dict_track['val_loss'] = [float(loss)]
-            self._dict_track[f'val_adds_acc'] = [ torch.mean(within_add.type(torch.float32)) )]
+            self._dict_track[f'val_adds_acc'] = [
+                float(torch.mean(within_add.type(torch.float32)))]
 
         tensorboard_logs = {'val_loss': float(loss)}
         val_loss = loss
@@ -458,43 +462,42 @@ class TrackNet6D(LightningModule):
                            target[0], model_points[0], cam[0], img_orig[0], unique_desig, idx[0])
         else:
             self.visu_forward = False
-        
+        unique_desig = batch[0][-1]
         # aggregate statistics per object (ADD-S sym and ADD non sym)
-        thr = self.exp.get('eval',{}).get('threshold_add',0.02)
-        within_add = torch.ge(torch.tensor( [thr]*_bs)  ,dis) # check if smaller ADD / ADD-s < 2cm
-        loss = torch.sum(dis)/_bs # calc mean over full batch
+        thr = self.exp.get('eval', {}).get('threshold_add', 0.02)
+        # check if smaller ADD / ADD-s < 2cm
+        within_add = torch.ge(torch.tensor(
+            [thr] * _bs, device=self.device), dis)
+        loss = torch.sum(dis) / _bs  # calc mean over full batch
 
         if f'test_loss' in self._dict_track.keys():
             self._dict_track[f'test_loss'].append(
                 float(loss))
             self._dict_track[f'test_adds_acc'].append(
-                torch.mean(within_add.type(torch.float32)) )
-            
+                float(torch.mean(within_add.type(torch.float32))))
+
         else:
             self._dict_track[f'test_loss'] = [float(loss)]
             self._dict_track[f'test_adds_acc'] = [
-                torch.mean(within_add.type(torch.float32)) ]
+                float(torch.mean(within_add.type(torch.float32)))]
 
-        for i in range(0,_bs):
-          # object loss for each object
-          if f'test_{int(unique_desig[i,1])}_loss' in self._dict_track.keys():
-              self._dict_track[f'test_{int(unique_desig[i,1])}_loss'].append(
-                  float(dis[i]))
-              self._dict_track[f'test_{int(unique_desig[i,1])}_adds_acc'].append( 
-                  float(within_add[i]) )
+        for i in range(0, _bs):
+            # object loss for each object
+            obj = int(unique_desig[1][i])
+            if f'test_{obj}_loss' in self._dict_track.keys():
+                self._dict_track[f'test_{obj}_loss'].append(
+                    float(dis[i]))
+                self._dict_track[f'test_{obj}_adds_acc'].append(
+                    float(within_add[i]))
+            else:
+                self._dict_track[f'test_{obj}_loss'] = [
+                    float(dis[i])]
+                self._dict_track[f'test_{obj}_adds_acc'] = [
+                    float(within_add[i])]
 
-              print("Appended new list ele " + f'test_{int(unique_desig[i,1])}_loss')
-          else:
-              self._dict_track[f'test_{int(unique_desig[i,1])}_loss'] = [
-                  float(dis[i])]
-              self._dict_track[f'test_{int(unique_desig[i,1])}_adds_acc'] = [
-                  float(within_add[i])]          
+        # TODO add ADD < 2cm implementaiton here !
 
-              print("Added new list ele " + f'test_{int(unique_desig[i,1])}_loss')
-
-        # TODO add ADD < 2cm implementaiton here ! 
-
-        tensorboard_logs = {'test_loss': test_loss}
+        tensorboard_logs = {'test_loss': loss}
         return {**tensorboard_logs, 'log': tensorboard_logs}
 
     def validation_epoch_end(self, outputs):
@@ -510,9 +513,9 @@ class TrackNet6D(LightningModule):
 
         self.counter_images_logged = 0  # reset image log counter
 
-        avg_val_dis_float = float(avg_dict['avg_val_loss']) 
-        return {'avg_val_dis_float': avg_val_dis_float, 
-                'avg_val_dis': avg_dict['avg_val_loss'], 
+        avg_val_dis_float = float(avg_dict['avg_val_loss'])
+        return {'avg_val_dis_float': avg_val_dis_float,
+                'avg_val_dis': avg_dict['avg_val_loss'],
                 'log': avg_dict}
 
     def train_epoch_end(self, outputs):
@@ -558,19 +561,19 @@ class TrackNet6D(LightningModule):
                                       cam_fy=float(cam[3]),
                                       store=store)
         self.Visu.plot_contour(tag='gt_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                      epoch=self.current_epoch,
-                                      img=img,
-                                      points=points,
-                                      cam_cx=float(cam[0]),
-                                      cam_cy=float(cam[1]),
-                                      cam_fx=float(cam[2]),
-                                      cam_fy=float(cam[3]),
-                                      store=store)
+                               epoch=self.current_epoch,
+                               img=img,
+                               points=points,
+                               cam_cx=float(cam[0]),
+                               cam_cy=float(cam[1]),
+                               cam_fx=float(cam[2]),
+                               cam_fy=float(cam[3]),
+                               store=store)
 
         t = pred_t.detach().cpu().numpy()
         r = pred_r.detach().cpu().numpy()
         rot = R.from_quat(re_quat(r, 'wxyz'))
-        
+
         self.Visu.plot_estimated_pose(tag='pred_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
                                       epoch=self.current_epoch,
                                       img=img,
@@ -583,21 +586,21 @@ class TrackNet6D(LightningModule):
                                       cam_cy=float(cam[1]),
                                       cam_fx=float(cam[2]),
                                       cam_fy=float(cam[3]),
-                                      store=store)        
+                                      store=store)
 
-        self.Visu.plot_contour( tag='pred_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                epoch=self.current_epoch,
-                                img=img,
-                                points=copy.deepcopy(
-                                    model_points[:, :].detach(
-                                    ).cpu().numpy()),
-                                trans=t.reshape((1, 3)),
-                                rot_mat=rot.as_matrix(),
-                                cam_cx=float(cam[0]),
-                                cam_cy=float(cam[1]),
-                                cam_fx=float(cam[2]),
-                                cam_fy=float(cam[3]),
-                                store=store)
+        self.Visu.plot_contour(tag='pred_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+                               epoch=self.current_epoch,
+                               img=img,
+                               points=copy.deepcopy(
+            model_points[:, :].detach(
+            ).cpu().numpy()),
+            trans=t.reshape((1, 3)),
+            rot_mat=rot.as_matrix(),
+            cam_cx=float(cam[0]),
+            cam_cy=float(cam[1]),
+            cam_fx=float(cam[2]),
+            cam_fy=float(cam[3]),
+            store=store)
 
         render_img, depth, h_render = self.vm.get_closest_image_batch(
             i=idx.unsqueeze(0), rot=pred_r.unsqueeze(0), conv='wxyz')
@@ -615,7 +618,7 @@ class TrackNet6D(LightningModule):
             [{'params': self.refiner.parameters()}], lr=self.hparams['lr'])
         scheduler = {
             'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **self.exp['lr_cfg']['on_plateau_cfg']),
-            'monitor': 'avg_val_dis',  # Default: val_loss
+            'monitor': 'train_loss',  # Default: val_loss
             'interval': self.exp['lr_cfg']['interval'],
             'frequency': self.exp['lr_cfg']['frequency']
         }
@@ -657,8 +660,8 @@ class TrackNet6D(LightningModule):
 
     def test_dataloader(self):
         dataset_test = GenericDataset(
-              cfg_d=self.exp['d_test'],
-              cfg_env=self.env)
+            cfg_d=self.exp['d_test'],
+            cfg_env=self.env)
         store = self.env['p_ycb'] + '/viewpoints_renderings'
         if self.vm is None:
             self.vm = ViewpointManager(
@@ -670,10 +673,10 @@ class TrackNet6D(LightningModule):
                 load_images=self.exp.get('vm', {}).get('load_images', False))
 
         dataloader_test = torch.utils.data.DataLoader(dataset_test,
-                                                        batch_size=self.exp['loader']['batch_size'],
-                                                        shuffle=False,
-                                                        num_workers=self.exp['loader']['workers'],
-                                                        pin_memory=True)
+                                                      batch_size=self.exp['loader']['batch_size'],
+                                                      shuffle=False,
+                                                      num_workers=self.exp['loader']['workers'],
+                                                      pin_memory=True)
         return dataloader_test
 
     def val_dataloader(self):
@@ -713,6 +716,7 @@ def file_path(string):
     else:
         raise NotADirectoryError(string)
 
+
 def move_dataset_to_ssd(env, exp):
     try:
         # Update the env for the model when copying dataset to ssd
@@ -747,7 +751,6 @@ def move_dataset_to_ssd(env, exp):
         env['p_ycb'] = p_ycb_new
         logging.info('Copying data failed')
     return exp, env
-    
 
 
 if __name__ == "__main__":
@@ -764,7 +767,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim_leon.yml',  # required=True,
+    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim_natrix.yml',  # required=True,
                         help='The main experiment yaml file.')
     parser.add_argument('--env', type=file_path, default='yaml/env/env_natrix_jonas.yml',
                         help='The environment yaml file.')
@@ -786,8 +789,7 @@ if __name__ == "__main__":
     new_path = '/'.join(p)
     exp['model_path'] = new_path
     model_path = exp['model_path']
-    
-    
+
     logger = logging.getLogger('TrackNet')
     # copy config files to model path
     if not os.path.exists(model_path):
@@ -805,7 +807,7 @@ if __name__ == "__main__":
 
     exp, env = move_dataset_to_ssd(env, exp)
     dic = {'exp': exp, 'env': env}
-    
+
     model = TrackNet6D(**dic)
 
     # default used by the Trainer
@@ -835,7 +837,7 @@ if __name__ == "__main__":
         model.load_state_dict(checkpoint['state_dict'])
 
     with torch.autograd.set_detect_anomaly(True):
-        trainer = Trainer(gpus=env.get('leonhard',{}).get('max_gpus',-1),
+        trainer = Trainer(gpus=env.get('leonhard', {}).get('max_gpus', -1),
                           num_nodes=1,
                           auto_lr_find=False,
                           accumulate_grad_batches=exp['training']['accumulate_grad_batches'],
@@ -843,8 +845,10 @@ if __name__ == "__main__":
                           checkpoint_callback=checkpoint_callback,
                           early_stop_callback=early_stop_callback,
                           fast_dev_run=False,
-                          limit_train_batches=exp['training'].get('limit_train_batches',5000),
-                          limit_val_batches=exp['training'].get('limit_val_batches',500),
+                          limit_train_batches=exp['training'].get(
+                              'limit_train_batches', 5000),
+                          limit_val_batches=exp['training'].get(
+                              'limit_val_batches', 500),
                           limit_test_batches=1.0,
                           val_check_interval=1.0,
                           progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
