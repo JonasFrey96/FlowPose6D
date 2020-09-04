@@ -284,7 +284,7 @@ class Visualizer():
             # you can get a high-resolution image as numpy array!!
             plot_img_np = get_img_from_fig(fig)
             self.writer.add_image(
-                f'{str(epoch)}_{tag}_project_batch', plot_img_np, global_step=epoch, dataformats='HWC')
+                f'{tag}_project_batch', plot_img_np, global_step=epoch, dataformats='HWC')
 
     def visu_network_input(self, tag, epoch, data, max_images=10, store=False, jupyter=False):
         num = min(max_images, data.shape[0])
@@ -320,7 +320,7 @@ class Visualizer():
             # you can get a high-resolution image as numpy array!!
             plot_img_np = get_img_from_fig(fig)
             self.writer.add_image(
-                f'{str(epoch)}_{tag}_network_input', plot_img_np, global_step=epoch, dataformats='HWC')
+                f'{tag}_network_input', plot_img_np, global_step=epoch, dataformats='HWC')
 
 
 def plot_pcd(x, point_size=0.005, c='g'):

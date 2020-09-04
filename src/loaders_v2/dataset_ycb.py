@@ -47,7 +47,7 @@ class YCB(Backend):
         self._length = len(self._batch_list)
         self._norm = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
+        self._num_pt = cfg_d.get('num_points', 1000)
         self._trancolor = transforms.ColorJitter(0.2, 0.2, 0.2, 0.05)
         self._front_num = 2
         self._minimum_num_pt = 50
@@ -220,9 +220,16 @@ class YCB(Backend):
         if self._cfg_d['output_cfg'].get('return_same_size_tensors', False):
             # maybe not zero the image completly
             # find complete workaround to deal with choose the target and the model point cloud do we need the corrospondence between points
+            torch_img = self._norm(torch.from_numpy(
+                img_masked.astype(np.float32)))
+            padded_img = torch.zeros((3, 480, 640), dtype=torch.float32)
+            sha = torch_img.shape
+            padded_img[:sha[0], :sha[1], :sha[2]
+                       ] = torch_img
+
             tup = (torch.from_numpy(cloud.astype(np.float32)),
                    torch.LongTensor(choose.astype(np.int32)),
-                   torch.Tensor([0]),
+                   padded_img,
                    torch.from_numpy(target.astype(np.float32)),
                    torch.from_numpy(model_points.astype(np.float32)),
                    torch.LongTensor([int(obj_idx) - 1]))

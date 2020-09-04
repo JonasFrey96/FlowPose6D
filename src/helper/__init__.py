@@ -4,6 +4,7 @@ from .plotting import plot_points, plot_two_pc
 from .postprocess import kf_sequence
 from .bounding_box import BoundingBox
 from .get_delta_t_in_image_space import get_delta_t_in_image_space, get_delta_t_in_euclidean
+from .camera import *
 __all__ = (
     'flatten_dict',
     'rotation_angle',
@@ -26,5 +27,8 @@ __all__ = (
     'get_bbox_480_640',
     'BoundingBox',
     'get_delta_t_in_image_space',
-    'get_delta_t_in_euclidean'
+    'get_delta_t_in_euclidean',
+    'backproject_points_batch',
+    'backproject_points',
+    'backproject_point'
 )

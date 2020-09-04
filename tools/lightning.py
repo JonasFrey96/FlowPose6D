@@ -156,9 +156,6 @@ class TrackNet6D(LightningModule):
             total_loss += loss
             total_dis += dis
 
-
-<< << << < HEAD
-
         if not skip:
             out_rx, out_tx = self.motion_network(emb1=emb_ls[0],
                                                  emb2=emb_ls[1],
@@ -175,13 +172,12 @@ class TrackNet6D(LightningModule):
 
         tensorboard_logs = {'train_loss': float(total_loss), 'train_dis': float(total_dis),
                             'train_loss_without_motion': float(loss_without_motion)}
-== == == =
+
         # choose correct loss here
         total_loss = total_loss / l
         total_dis = total_dis / l
         tensorboard_logs = {'train_loss': float(
             total_loss), 'train_dis': float(total_dis)}
->>>>>> > master
         return {'loss': total_loss, 'dis': total_dis, 'log': tensorboard_logs, 'progress_bar': {'train_dis': total_dis, 'train_loss': total_loss}}
 
     def validation_step(self, batch, batch_idx):
@@ -231,13 +227,8 @@ class TrackNet6D(LightningModule):
             total_loss += loss
             total_dis += dis
 
-<<<<<<< HEAD
         tensorboard_logs = {'val_loss': float(total_loss /
-                            len(batch)), 'val_dis': float(total_dis / len(batch) )}
-=======
-        tensorboard_logs = {'val_loss': float( total_loss /
-                            len(batch)), 'val_dis': float(total_dis / len(batch))}
->>>>>>> master
+                                              len(batch)), 'val_dis': float(total_dis / len(batch))}
         return {'val_loss': total_loss / len(batch), 'val_dis': total_dis / len(batch), 'log': tensorboard_logs}
 
     def test_step(self, batch, batch_idx):
@@ -288,10 +279,10 @@ class TrackNet6D(LightningModule):
                           target, model_points, cam, img_orig, unique_desig)
                 self.counter_images_logged += 1
             if avg_dict['avg_val_dis'] < self.exp['decay_margin_start'] and not self.w_decayed:
-              self.w = self.exp['w_normal'] * self.exp['w_normal_rate']
-              self.w_decayed = True
-              print("w_rate decayed") 
-            
+                self.w = self.exp['w_normal'] * self.exp['w_normal_rate']
+                self.w_decayed = True
+                print("w_rate decayed")
+
             total_loss += loss
             total_dis += dis
 
@@ -330,22 +321,18 @@ class TrackNet6D(LightningModule):
         # if avg_dict['avg_val_dis'] < self.early_stopping_value:
         #     print("figure out how to set stop training flag")
 
-<<<<<<< HEAD
-=======
         if avg_dict['avg_val_dis'] < self.exp['decay_margin_start'] and not self.w_decayed:
-          self.w = self.exp['w_normal'] * self.exp['w_normal_rate']
-          self.w_decayed = True
-          print("w_rate decayed") 
-          
+            self.w = self.exp['w_normal'] * self.exp['w_normal_rate']
+            self.w_decayed = True
+            print("w_rate decayed")
 
->>>>>>> master
         self.counter_images_logged = 0  # reset image log counter
         tensorboard_log = {}
         for k in avg_dict.keys():
-            tensorboard_log[k] = float( avg_dict[k] )
+            tensorboard_log[k] = float(avg_dict[k])
             avg_dict[k] = torch.tensor(
                 avg_dict[k], dtype=torch.float32, device=self.device)
-            
+
         return {**avg_dict, 'avg_val_dis_float': float(avg_dict['avg_val_dis']), 'log': tensorboard_log}
 
     def visu(self, batch_idx, pred_r, pred_t, pred_c, points, target, model_points, cam, img_orig, unique_desig):
@@ -466,16 +453,13 @@ def file_path(string):
 
 def read_args():
     parser = argparse.ArgumentParser()
-<<<<<<< HEAD
-    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_motion_train.yml',  # required=True,
-=======
     parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_load_and_fit.yml',  # required=True,
->>>>>>> master
                         help='The main experiment yaml file.')
     parser.add_argument('--env', type=file_path, default='yaml/env/env_natrix_jonas.yml',
                         help='The environment yaml file.')
     parser.add_argument('-w', '--workers', default=None)
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     # for reproducability
@@ -532,22 +516,20 @@ if __name__ == "__main__":
 
     # DEFAULTS used by the Trainer
     checkpoint_callback = ModelCheckpoint(
-        filepath= exp['model_path']+'/{epoch}-{avg_val_dis:.4f}',
+        filepath=exp['model_path'] + '/{epoch}-{avg_val_dis:.4f}',
         verbose=True,
         monitor="avg_val_dis",
         mode="min",
         prefix="",
-        save_last=True, 
+        save_last=True,
         save_top_k=10,
     )
-<<<<<<< HEAD
-=======
-    model = TrackNet6D(exp_cfg = exp, env_cfg = env)
-    
->>>>>>> master
-    if exp.get('checkpoint_restore', False):
-      checkpoint = torch.load(exp['checkpoint_path'], map_location=lambda storage, loc: storage)
-      model.load_state_dict(checkpoint['state_dict'])
+   model = TrackNet6D(exp_cfg=exp, env_cfg=env)
+
+   if exp.get('checkpoint_restore', False):
+        checkpoint = torch.load(
+            exp['checkpoint_path'], map_location=lambda storage, loc: storage)
+        model.load_state_dict(checkpoint['state_dict'])
 
     trainer = Trainer(gpus=1,
                       num_nodes=1,
@@ -561,23 +543,17 @@ if __name__ == "__main__":
                       limit_val_batches=5000,
                       limit_test_batches=1.0,
                       val_check_interval=1.0,
-                      progress_bar_refresh_rate= 0,
+                      progress_bar_refresh_rate=0,
                       max_epochs=100,
                       terminate_on_nan=True)
 
     if exp.get('model_mode', 'fit') == 'fit':
-      trainer.fit(model)
-    elif exp.get('model_mode', 'fit') == 'test' :
-      trainer.test(model)
-      if  exp.get('conv_test2df', False): 
-        command = 'cd scripts & python experiment2df.py %s --write-csv --write-pkl'%(model_path+'/lightning_logs/version_0' )  
-        os.system( command)
+        trainer.fit(model)
+    elif exp.get('model_mode', 'fit') == 'test':
+        trainer.test(model)
+        if  exp.get('conv_test2df', False):
+            command = 'cd scripts & python experiment2df.py %s --write-csv --write-pkl'%(model_path+'/lightning_logs/version_0' )
+            os.system(command)
     else:
-      print( "Wrong model_mode defined in exp config")
-<<<<<<< HEAD
-      raise Exception
-=======
-      raise Exception
-
-
->>>>>>> master
+        print("Wrong model_mode defined in exp config")
+        raise Exception

@@ -8,6 +8,16 @@ restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowN
 mail: false
 model_mode: fit
 
+model:
+  df_load: True
+  df_refiner: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
+  df_pose_estimator: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
+  df_initial_guess: True
+  df_calc_refinement: True
+  df_w_normal: 0.015
+  df_w_normal_rate: 0.3
+  df_refine_iterations: 2
+
 epochs: 500
 lr: 1.0e-06
 lr_cfg:

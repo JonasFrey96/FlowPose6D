@@ -39,23 +39,24 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 coloredlogs.install()
 
 # network dense fusion
-# from lib.loss import Loss
-# from lib.loss_refiner import Loss_refine
-# from lib.network import PoseNet, PoseRefineNet
+from lib.loss import Loss
+from lib.loss_refiner import Loss_refine
+
+from lib.network import PoseNet, PoseRefineNet
+
 # from lib.motion_network import MotionNetwork
 # from lib.motion_loss import motion_loss
 # dataset
+
 from loaders_v2 import GenericDataset
 from visu import Visualizer
 from helper import re_quat, flatten_dict
 from deep_im import DeepIM, ViewpointManager
 from helper import BoundingBox
 from helper import get_delta_t_in_euclidean
+from helper import backproject_points_batch, backproject_points, backproject_point
 from deep_im import LossAddS
 from rotations import *
-
-# move this to seperate file
-import matplotlib.pyplot as plt
 
 
 def get_bb_from_depth(depth):
@@ -69,63 +70,6 @@ def get_bb_from_depth(depth):
         bb_lsd.append(BoundingBox(p1=torch.stack(
             [min1, min2]), p2=torch.stack([max1, max2])))
     return bb_lsd
-
-
-def backproject_point(p, fx, fy, cx, cy):
-    u = int(((p[0] / p[2]) * fx) + cx)
-    v = int(((p[1] / p[2]) * fy) + cy)
-    return u, v
-
-
-def backproject_points(p, fx, fy, cx, cy):
-    """
-    p.shape = (nr_points,xyz)
-    """
-    # true_divide
-    u = torch.round((torch.div(p[:, 0], p[:, 2]) * fx) + cx)
-    v = torch.round((torch.div(p[:, 1], p[:, 2]) * fy) + cy)
-
-    if torch.isnan(u).any() or torch.isnan(v).any():
-        u = torch.tensor(cx).unsqueeze(0)
-        v = torch.tensor(cy).unsqueeze(0)
-        print('Predicted z=0 for translation. u=cx, v=cy')
-        # raise Exception
-
-    return torch.stack([v, u]).T
-
-
-def backproject_points_batch(p, fx, fy, cx, cy):
-    """
-    p.shape = (nr_points,xyz)
-    """
-    bs, dim, _ = p.shape
-    p = p.view(-1, 3)
-
-    u = torch.round(torch.true_divide(p[:, 0], p[:, 2]).view(
-        bs, -1) * fx.view(bs, -1).repeat(1, dim) + cx.view(bs, -1).repeat(1, dim))
-    v = torch.round(torch.true_divide(p[:, 0], p[:, 1]).view(
-        bs, -1) * fy.view(bs, -1).repeat(1, dim) + cy.view(bs, -1).repeat(1, dim))
-
-    return torch.stack([u, v], dim=2)
-
-
-def plt_img(img, name='plt_img.png', folder='/home/jonfrey/Debug'):
-
-    fig = plt.figure()
-    fig.add_subplot(1, 1, 1)
-    plt.imshow(img)
-    plt.axis("off")
-    plt.savefig(folder + '/' + name)
-
-
-def plt_torch(data, name='torch.png', folder='/home/jonfrey/Debug'):
-    img = render = np.transpose(
-        data[:, :, :].cpu().numpy().astype(np.uint8), (2, 1, 0))
-    fig = plt.figure()
-    fig.add_subplot(1, 1, 1)
-    plt.imshow(img)
-    plt.axis("off")
-    plt.savefig(folder + '/' + name)
 
 
 def get_bb_real_target(target, cam, gt_trans):
@@ -179,20 +123,35 @@ class TrackNet6D(LightningModule):
         print('Selected GPU: ', torch.cuda.device_count())
         for i in range(0, int(torch.cuda.device_count())):
             print(f'GPU {i} Type {torch.cuda.get_device_name(i)}')
-        self.refiner = DeepIM.from_weights(
-            21, restore_deepim_refiner)
+        num_obj = 21
 
-        num_poi = exp['d_train']['num_pt_mesh_small']
-        # self.criterion = Loss(num_poi, exp['d_train']['obj_list_sym'])
-        num_poi = exp['d_train']['num_pt_mesh_large']
-        # self.criterion_refine = Loss_refine(
-        #    num_poi, exp['d_train']['obj_list_sym'])
+        # number of input points to the network
+        num_points_small = exp['d_train']['num_pt_mesh_small']
+        num_points_large = exp['d_train']['num_pt_mesh_large']
+
+        self.refiner = DeepIM.from_weights(
+            num_obj, restore_deepim_refiner)
+
+        # df stands for DenseFusion
+        self.df_pose_estimator = PoseNet(
+            num_points=exp['d_test']['num_points'], num_obj=num_obj)
+        self.df_refiner = PoseRefineNet(
+            num_points=exp['d_test']['num_points'], num_obj=num_obj)
+
+        if exp.get('model', {}).get('df_load', False):
+            self.df_pose_estimator.load_state_dict(
+                torch.load(exp['model']['df_pose_estimator']))
+            self.df_refiner.load_state_dict(
+                torch.load(exp['model']['df_refiner']))
+
+        self.df_criterion = Loss(
+            num_points_mesh=num_points_small,
+            sym_list=exp['d_test']['obj_list_sym'])
+        self.df_criterion_refine = Loss_refine(
+            num_points_mesh=num_points_small,
+            sym_list=exp['d_test']['obj_list_sym'])
 
         self.criterion_adds = LossAddS(sym_list=exp['d_train']['obj_list_sym'])
-
-        self.refine = False
-        self.w = exp['w_normal']
-        self.w_decayed = False
 
         self.best_validation = 999
         self.best_validation_patience = 5
@@ -228,8 +187,49 @@ class TrackNet6D(LightningModule):
         translation_noise = 0.03
         # unpack batch
         points, choose, img, target, model_points, idx = batch[0:6]
+
         depth_img, label_img, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
+        _bs = points.shape[0]
+
+        if self.exp.get('model', {}).get('df_initial_guess', False):
+            # TODO DF is not able to deal wiht batches :/
+            df_dict = {}
+            for i in range(0, _bs):
+                img[i, :, :, :]
+                test = torch.nonzero(img[i, :, :, :])
+                a = torch.max(test[:, 0]) + 1
+                b = torch.max(test[:, 1]) + 1
+                c = torch.max(test[:, 2]) + 1
+
+                pred_r, pred_t, pred_c, emb, ap_x = self.df_pose_estimator(
+                    img[i, :a, :b, :c].unsqueeze(0),
+                    points[i, :, :].unsqueeze(0),
+                    choose[i, :, :].unsqueeze(0),
+                    idx[i, :].unsqueeze(0))
+
+                refine_start = self.exp.get('model', {}).get(
+                    'df_calc_refinement', False)
+                w = self.exp.get('model', {}).get('df_w_normal', 0.015)
+                loss, dis, new_points, new_target = self.df_criterion(
+                    pred_r, pred_t, pred_c,
+                    target[i, :, :].unsqueeze(0),
+                    model_points[i, :, :].unsqueeze(0),
+                    idx[i, :].unsqueeze(0),
+                    points[i, :, :].unsqueeze(0), w, refine_start)
+
+                df_dict['df_loss_pose_est'] = float(loss)
+                df_dict['df_dis_pose_est'] = float(dis)
+
+                if refine_start:
+                    for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
+                        pred_r, pred_t = self.df_refiner(new_points, emb, idx)
+                        dis, new_points, new_target = self.df_criterion_refine(
+                            pred_r, pred_t, new_target,
+                            model_points[i, :, :].unsqueeze(0),
+                            idx[i, :].unsqueeze(0),
+                            new_points)
+                        df_dict[f'df_dis_refine_{ite}'] = float(loss)
 
         # start with an inital guess (here we take the noisy version later from the dataloader or replay buffer implementation)
         # current estimate of the rotation and translations
@@ -336,6 +336,8 @@ class TrackNet6D(LightningModule):
             f2, f3, f4, f5, f6, delta_v, delta_rot_wxyz = self.refiner(
                 data, idx)
 
+            delta_rot_wxyz
+
             # Update translation prediction
             pred_trans_new = get_delta_t_in_euclidean(
                 delta_v.clone(), t_src=pred_trans.clone(),
@@ -354,6 +356,11 @@ class TrackNet6D(LightningModule):
 
             pred_trans = pred_trans + delta_t_clamp
 
+            # start with identity network output
+            identity = torch.zeros(pred_rot_wxyz.shape, device=self.device)
+            identity[:, 0] = 1
+            pred_rot_wxyz = pred_rot_wxyz + identity
+
             # Update rotation prediction
             pred_rot_wxyz = compose_quat(pred_rot_wxyz, delta_rot_wxyz)
 
@@ -369,7 +376,7 @@ class TrackNet6D(LightningModule):
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
                                   target=target, model_points=model_points, idx=idx)
 
-        return dis, pred_rot_wxyz, pred_trans
+        return dis, pred_rot_wxyz, pred_trans, df_dict
 
     def training_step(self, batch, batch_idx):
         self.visu_forward = False
@@ -377,7 +384,7 @@ class TrackNet6D(LightningModule):
         total_dis = 0
 
         st = time.time()
-        dis, _, _ = self(batch[0])
+        dis, _, _, df_dict = self(batch[0])
 
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         _bs = batch[0][0].shape[0]
@@ -399,6 +406,7 @@ class TrackNet6D(LightningModule):
 
         # tensorboard logging
         tensorboard_logs = {'train_loss': float(loss)}
+        tensorboard_logs = {**tensorboard_logs, **df_dict}
         #                     'train_loss_without_motion': float(0)}
         # 'dis': total_dis, 'log': tensorboard_logs, 'progress_bar': {'train_dis': total_dis, 'train_loss': total_loss}}
         return {'loss': loss, 'log': tensorboard_logs}
@@ -408,7 +416,7 @@ class TrackNet6D(LightningModule):
         total_dis = 0
 
         st = time.time()
-        dis, pred_r, pred_t = self(batch[0])
+        dis, pred_r, pred_t, df_dict = self(batch[0])
 
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         _bs = batch[0][0].shape[0]
@@ -441,6 +449,8 @@ class TrackNet6D(LightningModule):
                 float(torch.mean(within_add.type(torch.float32)))]
 
         tensorboard_logs = {'val_loss': float(loss)}
+        tensorboard_logs = {**tensorboard_logs, **df_dict}
+
         val_loss = loss
         val_dis = loss
         return {'val_loss': val_loss, 'val_dis': val_dis, 'log': tensorboard_logs}
@@ -449,7 +459,7 @@ class TrackNet6D(LightningModule):
 
         _bs = batch[0][0].shape[0]
         # forward pass
-        dis, pred_r, pred_t = self(batch[0])
+        dis, pred_r, pred_t, df_dict = self(batch[0])
 
         # visualization
         if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_test', 1):
@@ -605,7 +615,44 @@ class TrackNet6D(LightningModule):
         render_img, depth, h_render = self.vm.get_closest_image_batch(
             i=idx.unsqueeze(0), rot=pred_r.unsqueeze(0), conv='wxyz')
         print(render_img.shape, img_orig.shape)
-        data = torch.cat([img_orig.unsqueeze(0), render_img], dim=3)
+        # get the bounding box !
+        w = 640
+        h = 480
+        bs = img.shape[0]
+
+        real_img = torch.empty((bs, 3, h, w), device=self.device)
+        # update the target to get new bb
+
+        base_inital = quat_to_rot(
+            pred_r.unsqueeze(0), 'wxyz', device=self.device).squeeze(0)
+        base_new = base_inital.view(-1, 3, 3).permute(0, 2, 1)
+        pred_points = torch.add(
+            torch.bmm(model_points.unsqueeze(0), base_inital.unsqueeze(0)), pred_t)
+        #torch.Size([16, 2000, 3]), torch.Size([16, 4]) , torch.Size([16, 3])
+        bb_ls = get_bb_real_target(
+            pred_points, cam.unsqueeze(0), pred_t.unsqueeze(0))
+
+        for j, b in enumerate(bb_ls):
+            if not b.check_min_size():
+                print("the bounding box violates the min size constrain")
+                print(b)
+            c = cam.unsqueeze(0)
+            center_real = backproject_points(
+                pred_t.view(1, 3), fx=c[j, 2], fy=c[j, 3], cx=c[j, 0], cy=c[j, 1])
+            center_real = center_real.squeeze()
+            b.move(-center_real[0], -center_real[1])
+            b.expand(1.1)
+            b.expand_to_correct_ratio(w, h)
+            b.move(center_real[0], center_real[1])
+            crop_real = b.crop(img_orig).unsqueeze(0)
+            up = torch.nn.UpsamplingBilinear2d(size=(h, w))
+            crop_real = torch.transpose(crop_real, 1, 3)
+            crop_real = torch.transpose(crop_real, 2, 3)
+            real_img[j] = up(crop_real)
+        inp = real_img[0].unsqueeze(0)
+        inp = torch.transpose(inp, 1, 3)
+        inp = torch.transpose(inp, 1, 2)
+        data = torch.cat([inp, render_img], dim=3)
         data = torch.transpose(data, 1, 3)
         data = torch.transpose(data, 2, 3)
         self.Visu.visu_network_input(tag='render_real_comp_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
@@ -767,7 +814,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim_natrix.yml',  # required=True,
+    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim_debug_natrix.yml',  # required=True,
                         help='The main experiment yaml file.')
     parser.add_argument('--env', type=file_path, default='yaml/env/env_natrix_jonas.yml',
                         help='The environment yaml file.')
