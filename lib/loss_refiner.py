@@ -7,7 +7,7 @@ import torch.nn as nn
 import random
 import torch.backends.cudnn as cudnn
 # from lib.knn.__init__ import KNearestNeighbor
-
+from rotations import quat_to_rot
 
 # def loss_calculation(pred_r, pred_t, target, model_points, idx, points, num_point_mesh, sym_list):
 #     pred_r = pred_r.view(1, 1, -1)
@@ -74,6 +74,7 @@ import torch.backends.cudnn as cudnn
 #     # print('------------> ', dis.item(), idx[0].item())
 #     return dis, new_points.detach(), new_target.detach()
 
+
 def knn(ref, query):
     """return indices of ref for each query point. L2 norm
 
@@ -91,30 +92,14 @@ def knn(ref, query):
     return knn
 
 
-def loss_calculation2(pred_r, pred_t, target, model_points, idx, points, num_point_mesh, sym_list):
+def loss_calculation2(pred_r, pred_t, target, model_points, idx, points, num_point_mesh, sym_list, device):
     pred_r = pred_r.view(1, 1, -1)
     pred_t = pred_t.view(1, 1, -1)
     bs, num_p, _ = pred_r.size()
     num_input_points = len(points[0])
 
     pred_r = pred_r / (torch.norm(pred_r, dim=2).view(bs, num_p, 1))
-
-    base = torch.cat(((1.0 - 2.0 * (pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),
-                      (2.0 * pred_r[:, :, 1] * pred_r[:, :, 2] - 2.0 *
-                       pred_r[:, :, 0] * pred_r[:, :, 3]).view(bs, num_p, 1),
-                      (2.0 * pred_r[:, :, 0] * pred_r[:, :, 2] + 2.0 *
-                       pred_r[:, :, 1] * pred_r[:, :, 3]).view(bs, num_p, 1),
-                      (2.0 * pred_r[:, :, 1] * pred_r[:, :, 2] + 2.0 *
-                       pred_r[:, :, 3] * pred_r[:, :, 0]).view(bs, num_p, 1),
-                      (1.0 - 2.0 * (pred_r[:, :, 1]**2 +
-                                    pred_r[:, :, 3]**2)).view(bs, num_p, 1),
-                      (-2.0 * pred_r[:, :, 0] * pred_r[:, :, 1] + 2.0 *
-                       pred_r[:, :, 2] * pred_r[:, :, 3]).view(bs, num_p, 1),
-                      (-2.0 * pred_r[:, :, 0] * pred_r[:, :, 2] + 2.0 *
-                       pred_r[:, :, 1] * pred_r[:, :, 3]).view(bs, num_p, 1),
-                      (2.0 * pred_r[:, :, 0] * pred_r[:, :, 1] + 2.0 *
-                       pred_r[:, :, 2] * pred_r[:, :, 3]).view(bs, num_p, 1),
-                      (1.0 - 2.0 * (pred_r[:, :, 1]**2 + pred_r[:, :, 2]**2)).view(bs, num_p, 1)), dim=2).contiguous().view(bs * num_p, 3, 3)
+    base = quat_to_rot(pred_r.squeeze(1), 'wxyz', device=device)
 
     ori_base = base
     base = base.contiguous().transpose(2, 1).contiguous()
@@ -159,5 +144,5 @@ class Loss_refine(_Loss):
         self.num_pt_mesh = num_points_mesh
         self.sym_list = sym_list
 
-    def forward(self, pred_r, pred_t, target, model_points, idx, points):
-        return loss_calculation2(pred_r, pred_t, target, model_points, idx, points, self.num_pt_mesh, self.sym_list)
+    def forward(self, pred_r, pred_t, target, model_points, idx, points, device):
+        return loss_calculation2(pred_r, pred_t, target, model_points, idx, points, self.num_pt_mesh, self.sym_list, device)

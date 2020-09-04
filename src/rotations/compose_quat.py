@@ -11,6 +11,7 @@ from rotations import norm_quat
 
 def quaternion_raw_multiply(p, q):
     """
+
     Multiply two quaternions.
     Usual torch rules for broadcasting apply.
 
@@ -33,8 +34,10 @@ def quaternion_raw_multiply(p, q):
 def compose_quat(p, q):
     """
     input is wxyz
+    Returns:
+      out = normalized( p * q )
     """
-    out = quaternion_raw_multiply(p, q)
+    out = quaternion_raw_multiply(norm_quat(p), norm_quat(q))
     return norm_quat(out)
 
 

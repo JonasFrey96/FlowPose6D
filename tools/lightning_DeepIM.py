@@ -190,10 +190,28 @@ class TrackNet6D(LightningModule):
 
         depth_img, label_img, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
-        _bs = points.shape[0]
 
         if self.exp.get('model', {}).get('df_initial_guess', False):
-            # TODO DF is not able to deal wiht batches :/
+            # introduce new tensors for full tracking dense fusion
+            _bs = points.shape[0]
+            num_points = exp['d_train']['num_points']
+            batch_pred_r = torch.zeros(
+                (_bs, num_points, 4), device=self.device)
+            batch_pred_t = torch.zeros(
+                (_bs, num_points, 3), device=self.device)
+            batch_pred_c = torch.zeros(
+                (_bs, num_points, 1), device=self.device)
+            batch_loss = torch.zeros((_bs, 1), device=self.device)
+            batch_dis = torch.zeros((_bs, 1), device=self.device)
+
+            # refinement store
+            batch_pred_r_total = torch.zeros(
+                (_bs, 4), device=self.device)
+            batch_pred_t_total = torch.zeros(
+                (_bs, 3), device=self.device)
+            batch_dis_refine = torch.zeros((_bs, 1), device=self.device)
+
+            # TODO DF is not able to deal with batches :/
             df_dict = {}
             for i in range(0, _bs):
                 img[i, :, :, :]
@@ -208,6 +226,11 @@ class TrackNet6D(LightningModule):
                     choose[i, :, :].unsqueeze(0),
                     idx[i, :].unsqueeze(0))
 
+                # store pose estimator output
+                batch_pred_r[i, :, :] = pred_r
+                batch_pred_t[i, :, :] = pred_t
+                batch_pred_c[i, :, :] = pred_c
+
                 refine_start = self.exp.get('model', {}).get(
                     'df_calc_refinement', False)
                 w = self.exp.get('model', {}).get('df_w_normal', 0.015)
@@ -216,10 +239,14 @@ class TrackNet6D(LightningModule):
                     target[i, :, :].unsqueeze(0),
                     model_points[i, :, :].unsqueeze(0),
                     idx[i, :].unsqueeze(0),
-                    points[i, :, :].unsqueeze(0), w, refine_start)
+                    points[i, :, :].unsqueeze(0), w, refine_start, self.device)
 
-                df_dict['df_loss_pose_est'] = float(loss)
-                df_dict['df_dis_pose_est'] = float(dis)
+                batch_loss[i, :] = loss
+                batch_dis[i, :] = dis
+
+                _, which_max = torch.max(pred_c, 1)
+                pred_r_current = pred_r[0, which_max, :].squeeze(0)
+                pred_t_current = pred_t[0, which_max, :].squeeze(0)
 
                 if refine_start:
                     for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
@@ -228,8 +255,15 @@ class TrackNet6D(LightningModule):
                             pred_r, pred_t, new_target,
                             model_points[i, :, :].unsqueeze(0),
                             idx[i, :].unsqueeze(0),
-                            new_points)
-                        df_dict[f'df_dis_refine_{ite}'] = float(loss)
+                            new_points, self.device)
+
+                        pred_r_current = compose_quat(
+                            pred_r_current, pred_r)
+                        pred_t_current = pred_t_current + pred_t
+
+                        batch_dis_refine[i, :] = dis
+                        batch_pred_r_total[i, :] = pred_r_current
+                        batch_pred_t_total[i, :] = pred_t_current
 
         # start with an inital guess (here we take the noisy version later from the dataloader or replay buffer implementation)
         # current estimate of the rotation and translations
@@ -375,6 +409,13 @@ class TrackNet6D(LightningModule):
         # Compute ADD / ADD-S loss
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
                                   target=target, model_points=model_points, idx=idx)
+
+        df_dict[f'df_dis_refine_avg_batch'] = torch.mean(
+            batch_dis_refine, dim=0).detach()
+        df_dict['df_loss_pose_est_avg_batch'] = torch.mean(
+            batch_loss, dim=0).detach()
+        df_dict['df_dis_pose_est_avg_batch'] = torch.mean(
+            batch_dis, dim=0).detach()
 
         return dis, pred_rot_wxyz, pred_trans, df_dict
 
@@ -614,7 +655,6 @@ class TrackNet6D(LightningModule):
 
         render_img, depth, h_render = self.vm.get_closest_image_batch(
             i=idx.unsqueeze(0), rot=pred_r.unsqueeze(0), conv='wxyz')
-        print(render_img.shape, img_orig.shape)
         # get the bounding box !
         w = 640
         h = 480
