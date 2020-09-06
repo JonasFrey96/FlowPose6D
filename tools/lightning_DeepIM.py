@@ -10,6 +10,7 @@ import shutil
 import argparse
 import logging
 import signal
+import pickle
 
 
 # misc
@@ -102,9 +103,18 @@ def get_bb_real_target(target, cam, gt_trans):
     return bb_ls
 
 
+def check_exp(exp):
+    if exp['model']['inital_pose']['mode'] == 'DenseFusionInit' and not exp['model']['df_load']:
+        raise AssertionError
+
+
 class TrackNet6D(LightningModule):
     def __init__(self, exp, env):
         super().__init__()
+
+        # check exp for errors
+        check_exp(exp)
+
         self.vm = None
         self.visu_forward = False
         # logging h-params
@@ -191,7 +201,7 @@ class TrackNet6D(LightningModule):
         depth_img, label_img, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
-        if self.exp.get('model', {}).get('df_initial_guess', False):
+        if self.exp.get('model', {}).get('df_load', False):
             # introduce new tensors for full tracking dense fusion
             _bs = points.shape[0]
             num_points = exp['d_train']['num_points']
@@ -211,20 +221,99 @@ class TrackNet6D(LightningModule):
                 (_bs, 3), device=self.device)
             batch_dis_refine = torch.zeros((_bs, 1), device=self.device)
 
-            # TODO DF is not able to deal with batches :/
             df_dict = {}
+
             for i in range(0, _bs):
-                img[i, :, :, :]
-                test = torch.nonzero(img[i, :, :, :])
-                a = torch.max(test[:, 0]) + 1
-                b = torch.max(test[:, 1]) + 1
-                c = torch.max(test[:, 2]) + 1
+                f = self.env['p_ycb'] + \
+                    f'/{unique_desig[0][i]}-df_prediction.pkl'
+                if os.path.exists(f):
+                    # Add this to dataloader instead
+                    pkl_file = open(f, 'rb')
+                    store = pickle.load(pkl_file)
+                    pkl_file.close()
+
+                    batch_pred_r_total[i, :] = torch.from_numpy(
+                        store['inital_pred_r'])
+                    batch_pred_t_total[i, :] = torch.from_numpy(
+                        store['inital_pred_t'])
+                    batch_dis = torch.from_numpy(store['inital_pred_dis'])
+                    try:
+                        batch_pred_r_total[i, :] = torch.from_numpy(
+                            store['refine_1_pred_r'])
+                        batch_pred_t_total[i, :] = torch.from_numpy(
+                            store['refine_1_pred_t'])
+                        batch_dis_refine[i, :] = torch.from_numpy(
+                            store['refine_1_dis'])
+
+                    except:
+                        logging.warning(
+                            'Refinement data not available for ' + f)
+
+                        # skipp applying DenseFusion network
+                    continue
+
+                def ret_cropped_image(img):
+                    test = torch.nonzero(img[:, :, :])
+                    a = torch.max(test[:, 0]) + 1
+                    b = torch.max(test[:, 1]) + 1
+                    c = torch.max(test[:, 2]) + 1
+                    return img[:a, :b, :c]
+
+                def padded_cat(list_of_images, device):
+                    """returns torch.tensor of concatenated images with dim = max size of image padded with zeros
+
+                    Args:
+                        list_of_images ([type]): List of Images Channels x Heigh x Width
+
+                    Returns:
+                        padded_cat [type]: Tensor of concatination result len(list_of_images) x Channels x max(Height) x max(Width)
+                        valid_indexe: len(list_of_images) x 2
+                    """
+                    c = list_of_images[0].shape[0]
+                    h = [x.shape[1] for x in list_of_images]
+                    w = [x.shape[2] for x in list_of_images]
+                    max_h = max(h)
+                    max_w = max(w)
+                    padded_cat = torch.zeros(
+                        (len(list_of_images), c, max_h, max_w), device=device)
+                    for i, img in enumerate(list_of_images):
+                        padded_cat[i, :, :h[i], :w[i]] = img
+
+                    valid_indexes = torch.tensor([h, w], device=device)
+                    return padded_cat, valid_indexes
+
+                def tight_image_batch(img_batch, device):
+                    ls = []
+                    for i in range(img_batch.shape[0]):
+                        ls.append(ret_cropped_image(img[i]))
+
+                    tight_padded_img_batch, valid_indexes = padded_cat(
+                        ls,
+                        device=self.device)
+                    return tight_padded_img_batch
+
+                tight_padded_img_batch = tight_image_batch(
+                    img, device=self.device)
+
+                img_inp = ret_cropped_image(img[i]).unsqueeze(0)
+                st = time.time()
 
                 pred_r, pred_t, pred_c, emb, ap_x = self.df_pose_estimator(
-                    img[i, :a, :b, :c].unsqueeze(0),
-                    points[i, :, :].unsqueeze(0),
-                    choose[i, :, :].unsqueeze(0),
-                    idx[i, :].unsqueeze(0))
+                    img_inp,
+                    points[i].unsqueeze(0),
+                    choose[i].unsqueeze(0),
+                    idx[i].unsqueeze(0))
+
+                st2 = time.time()
+                # test of higher batch size is valid
+                pred_r2, pred_t2, pred_c2, emb2, ap_x2 = self.df_pose_estimator(
+                    tight_padded_img_batch,
+                    points,
+                    choose,
+                    idx)
+                st3 = time.time()
+
+                print(f'1 batch{st2-st} s, 10batches {st3-st2} s')
 
                 # store pose estimator output
                 batch_pred_r[i, :, :] = pred_r
@@ -232,8 +321,9 @@ class TrackNet6D(LightningModule):
                 batch_pred_c[i, :, :] = pred_c
 
                 refine_start = self.exp.get('model', {}).get(
-                    'df_calc_refinement', False)
+                    'df_refine', False)
                 w = self.exp.get('model', {}).get('df_w_normal', 0.015)
+
                 loss, dis, new_points, new_target = self.df_criterion(
                     pred_r, pred_t, pred_c,
                     target[i, :, :].unsqueeze(0),
@@ -246,7 +336,13 @@ class TrackNet6D(LightningModule):
 
                 _, which_max = torch.max(pred_c, 1)
                 pred_r_current = pred_r[0, which_max, :].squeeze(0)
-                pred_t_current = pred_t[0, which_max, :].squeeze(0)
+                pred_t_current = pred_t[0, which_max, :].squeeze(
+                    0) + points[i, which_max, :]
+
+                store = {'inital_pred_r': pred_r[0, which_max, :].squeeze(0).cpu().detach().numpy(),
+                         'inital_pred_t': pred_t[0, which_max, :].squeeze(0).cpu().detach().numpy(),
+                         'inital_pred_loss': loss.cpu().detach().numpy(),
+                         'inital_pred_dis': dis.cpu().detach().numpy()}
 
                 if refine_start:
                     for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
@@ -265,21 +361,49 @@ class TrackNet6D(LightningModule):
                         batch_pred_r_total[i, :] = pred_r_current
                         batch_pred_t_total[i, :] = pred_t_current
 
-        # start with an inital guess (here we take the noisy version later from the dataloader or replay buffer implementation)
-        # current estimate of the rotation and translations
+                        store[f'refine_{ite}_pred_r'] = pred_r_current.cpu(
+                        ).detach().numpy()
+                        store[f'refine_{ite}_pred_t'] = pred_t_current.cpu(
+                        ).detach().numpy()
+                        store[f'refine_{ite}_dis'] = dis.cpu().detach().numpy()
+                else:
+                    batch_pred_r_total[i, :] = pred_r_current
+                    batch_pred_t_total[i, :] = pred_t_current
+        if self.exp.get('model', {}).get(
+                'df_dump_pred_pickle', {False}):
+            f = self.env['p_ycb'] + f'/{unique_desig[0][i]}-df_prediction.pkl'
+            output = open(f, 'wb')
+            pickle.dump(store, output)
+            output.close()
 
-        pred_rot_wxyz, pred_trans = gt_rot_wxyz, torch.normal(
-            mean=gt_trans, std=self.exp.get('training', {}).get('translation_noise_inital', 0.03))
-        # pred_rot_mat = quat_to_rot(
-        # pred_rot_wxyz, conv='wxyz', device=self.device)
+        mode = self.exp.get('model', {}).get(
+            'inital_pose', {}).get('mode', {'TransNoise'})
+        if mode == 'DenseFusionInit':
+            pred_rot_wxyz = batch_pred_r_total
+            pred_trans = batch_pred_t_total
+        elif mode == 'TransNoise':
+            pred_rot_wxyz = gt_rot_wxyz
+            pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
+                'training', {}).get('translation_noise_inital', 0.03))
+        elif mode == 'RotTransNoise':
+            pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
+                'training', {}).get('translation_noise_inital', 0.03))
+            raise AssertionError
+        elif mode == 'RotNoise':
+            from scipy.stats import special_ortho_group
+            mat = special_ortho_group.rvs(dim=3, size=bs)
+            pred_trans = gt_trans
 
-        base_inital = quat_to_rot(
+            raise AssertionError
+        else:
+            raise AssertionError
+
+        # apply pred_rot_wxyz, pred_trans (based on the mode) to get pred_points
+        init_rot_mat = quat_to_rot(
             pred_rot_wxyz, 'wxyz', device=self.device).unsqueeze(1)
-        base_inital = base_inital.view(-1, 3, 3).permute(0,
-                                                         2, 1)  # transposed of R
-
+        init_rot_mat = init_rot_mat.view(-1, 3, 3).permute(0, 2, 1)
         pred_points = torch.add(
-            torch.bmm(model_points, base_inital), pred_trans.unsqueeze(1))
+            torch.bmm(model_points, init_rot_mat), pred_trans.unsqueeze(1))
 
         w = 640
         h = 480
@@ -668,7 +792,7 @@ class TrackNet6D(LightningModule):
         base_new = base_inital.view(-1, 3, 3).permute(0, 2, 1)
         pred_points = torch.add(
             torch.bmm(model_points.unsqueeze(0), base_inital.unsqueeze(0)), pred_t)
-        #torch.Size([16, 2000, 3]), torch.Size([16, 4]) , torch.Size([16, 3])
+        # torch.Size([16, 2000, 3]), torch.Size([16, 4]) , torch.Size([16, 3])
         bb_ls = get_bb_real_target(
             pred_points, cam.unsqueeze(0), pred_t.unsqueeze(0))
 
@@ -865,12 +989,12 @@ if __name__ == "__main__":
     exp = ConfigLoader().from_file(exp_cfg_path).get_FullLoader()
     env = ConfigLoader().from_file(env_cfg_path).get_FullLoader()
 
-    """
-    Trainer args(gpus, num_nodes, etc…) & & Program arguments(data_path, cluster_email, etc…)
-    Model specific arguments(layer_dim, num_layers, learning_rate, etc…)
-    """
-    timestamp = datetime.datetime.now().replace(microsecond=0).isoformat()
+    if exp['model_path'].split('/')[-2] == 'debug':
+        p = '/'.join(exp['model_path'].split('/')[:-2])
+        print('DELETE PATH: ', p)
+        shutil.rmtree(p)
 
+    timestamp = datetime.datetime.now().replace(microsecond=0).isoformat()
     p = exp['model_path'].split('/')
     p.append(str(timestamp) + '_' + p.pop())
     new_path = '/'.join(p)
@@ -933,14 +1057,14 @@ if __name__ == "__main__":
                           early_stop_callback=early_stop_callback,
                           fast_dev_run=False,
                           limit_train_batches=exp['training'].get(
-                              'limit_train_batches', 5000),
-                          limit_val_batches=exp['training'].get(
-                              'limit_val_batches', 500),
-                          limit_test_batches=1.0,
-                          val_check_interval=1.0,
-                          progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
-                          max_epochs=exp['training']['max_epochs'],
-                          terminate_on_nan=False)
+            'limit_train_batches', 5000),
+            limit_val_batches=exp['training'].get(
+            'limit_val_batches', 500),
+            limit_test_batches=1.0,
+            val_check_interval=1.0,
+            progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
+            max_epochs=exp['training']['max_epochs'],
+            terminate_on_nan=False)
 
     if exp.get('model_mode', 'fit') == 'fit':
         # lr_finder = trainer.lr_find(

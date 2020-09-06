@@ -7,6 +7,45 @@ import collections
 import torch
 import copy
 
+# orig
+# def batched_index_select(t, inds, dim=1):
+#     """index batch tensor
+
+#     Args:
+#         t ([torch.Tensor]): BS x select_dim x Features
+#         dim ([int]): select_dim = 1
+#         inds ([torch.Tensor]): BS x select_dim
+
+#     Returns:
+#         [type]: [description]
+#     """
+#     dummy = inds.unsqueeze(2).expand(inds.size(0), inds.size(1), t.size(2))
+#     out = t.gather(dim, dummy)  # b x e x f
+#     return out
+
+
+def batched_index_select(t, inds, dim=1):
+    """index batch tensor
+
+    Args:
+        t ([torch.Tensor]): BS x select_dim x Features or BS x select_dim x Feat1 x Feat2 
+        dim ([int]): select_dim = 1
+        inds ([torch.Tensor]): BS x select_dim
+
+    Returns:
+        [type]: [description]
+    """
+    if inds.shape[0] == 2 and inds[0, 0] != inds[1, 0]:
+        raise Exception  # check if it works actually
+    if len(t.shape) == 3:
+        dummy = inds.unsqueeze(2).expand(
+            inds.size(0), inds.size(1), t.size(2))
+    elif len(t.shape) == 4:
+        dummy = inds.unsqueeze(2).unsqueeze(3).expand(
+            inds.size(0), inds.size(1), t.size(2), t.size(3))
+    out = t.gather(dim, dummy)  # b x e x f
+    return out
+
 
 def quat_to_rot(rot, conv='wxyz', device='cpu'):
     """converts quat into rotation matrix

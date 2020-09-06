@@ -20,20 +20,7 @@ import torch
 # compute the new estimated pose after the coordinate transform applied previously. ->
 # take the ADD error of the target model_points and estimated rotated points
 
-def batched_index_select(t, inds, dim=1):
-    """index batch tensor
-
-    Args:
-        t ([torch.Tensor]): BS x select_dim x Features
-        dim ([int]): select_dim = 1
-        inds ([torch.Tensor]): BS x select_dim
-
-    Returns:
-        [type]: [description]
-    """
-    dummy = inds.unsqueeze(2).expand(inds.size(0), inds.size(1), t.size(2))
-    out = t.gather(dim, dummy)  # b x e x f
-    return out
+from helper import batched_index_select
 
 
 class PredictionHead(nn.Module):
