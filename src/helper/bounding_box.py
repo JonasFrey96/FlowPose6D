@@ -33,15 +33,14 @@ class BoundingBox():
         h = self.height()
         return f'TL Cor: {self.tl}, BR Cor: {self.br}, Widht: {w}, Height: {h}'
 
-    def width(self):
-
-        return (self.br[1] - self.tl[1])
-
     def height(self):
         return (self.br[0] - self.tl[0])
 
+    def width(self):
+        return (self.br[1] - self.tl[1])
+
     def check_min_size(self, min_h=40, min_w=40):
-        if self.height() < min_h or self.width() < min_w:
+        if 0 < self.height() < min_h or 0 < self.width() < min_w:
             return False
         else:
             return True
@@ -64,6 +63,12 @@ class BoundingBox():
         self.tl[0] -= u
         self.br[1] += v
         self.tl[1] -= v
+
+    def set_max(self, max_height=480, max_width=640):
+        self.tl[0] = 0
+        self.tl[1] = 0
+        self.br[0] = max_height
+        self.br[1] = max_width
 
     def limit_bb(self, max_height=480, max_width=640, store=False):
         if store:
@@ -108,13 +113,34 @@ class BoundingBox():
                 br[1] = max_width
             return tl, br
 
-    def crop(self, img):
+    def crop(self, img, max_height=480, max_width=640):
         if self.valid():
             return img[int(self.tl[0]):int(self.br[0]), int(self.tl[1]):int(self.br[1]), :]
         else:
             # to find way not to create a new tensor with doube the size (maybe just translate the original image and then pad with 0)
             h = img.shape[0]
             w = img.shape[1]
+            p = 300
+            if self.tl[0] < -p:
+                self.tl[0] = -p
+            elif self.tl[0] > max_height + p:
+                self.tl[0] = max_height + p
+
+            if self.tl[1] < -p:
+                self.tl[1] = -p
+            elif self.tl[1] > max_width + p:
+                self.tl[1] = max_width + p
+
+            if self.br[0] < -p:
+                self.br[0] = -p
+            elif self.br[0] > max_height + p:
+                self.br[0] = max_height + p
+
+            if self.br[1] < -p:
+                self.br[1] = -p
+            elif self.br[1] > max_width + p:
+                self.br[1] = max_width + p
+
             img_pad = torch.zeros((int(h * 3), int(w * 3), img.shape[2]))
 
             off_h = int(h)
@@ -136,7 +162,7 @@ class BoundingBox():
             [std_h, std_w])).astype(dtype=np.int32)
 
     def valid(self, w=640, h=480):
-        return self.tl[0] >= 0 and self.tl[1] >= 0 and self.br[0] < h and self.br[1] < w
+        return self.tl[0] >= 0 and self.tl[1] >= 0 and self.br[0] <= h and self.br[1] <= w
 
     def expand_to_correct_ratio(self, w, h):
         if self.width() / self.height() > w / h:

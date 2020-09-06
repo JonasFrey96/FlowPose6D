@@ -174,7 +174,7 @@ class TrackNet6D(LightningModule):
 
         self.hparams = exp_config_flatten
         self.hparams['lr'] = exp['lr']
-
+        self.pin_mem = True
         self.test_size = 0.9
         self.env, self.exp = env, exp
         restore_deepim_refiner = self.exp.get(
@@ -194,14 +194,16 @@ class TrackNet6D(LightningModule):
         # df stands for DenseFusion
         self.df_pose_estimator = PoseNet(
             num_points=exp['d_test']['num_points'], num_obj=num_obj)
-        self.df_refiner = PoseRefineNet(
-            num_points=exp['d_test']['num_points'], num_obj=num_obj)
+        if exp.get('model', {}).get('df_refine', False):
+            self.df_refiner = PoseRefineNet(
+                num_points=exp['d_test']['num_points'], num_obj=num_obj)
 
         if exp.get('model', {}).get('df_load', False):
             self.df_pose_estimator.load_state_dict(
                 torch.load(exp['model']['df_pose_estimator']))
-            self.df_refiner.load_state_dict(
-                torch.load(exp['model']['df_refiner']))
+            if exp.get('model', {}).get('df_refine', False):
+                self.df_refiner.load_state_dict(
+                    torch.load(exp['model']['df_refiner']))
 
         self.df_criterion = Loss(
             num_points_mesh=num_points_small,
@@ -231,7 +233,7 @@ class TrackNet6D(LightningModule):
         logging.getLogger("lightning").addHandler(fh)
 
     def forward(self, batch):
-
+        torch.cuda.empty_cache()
         # Hyper parameters that should  be moved to config
         refine_iterations = self.exp.get(
             'training', {}).get('refine_iterations', 1)
@@ -252,33 +254,21 @@ class TrackNet6D(LightningModule):
 
         if self.exp.get('model', {}).get('df_load', False):
             # introduce new tensors for full tracking dense fusion
+            st = time.time()
             _bs = points.shape[0]
             num_points = exp['d_train']['num_points']
-            batch_pred_r = torch.zeros(
-                (_bs, num_points, 4), device=self.device)
-            batch_pred_t = torch.zeros(
-                (_bs, num_points, 3), device=self.device)
-            batch_pred_c = torch.zeros(
-                (_bs, num_points, 1), device=self.device)
-            batch_loss = torch.zeros((_bs, 1), device=self.device)
-            batch_dis = torch.zeros((_bs, 1), device=self.device)
-
-            # refinement store
-            batch_pred_r_total = torch.zeros(
-                (_bs, 4), device=self.device)
-            batch_pred_t_total = torch.zeros(
-                (_bs, 3), device=self.device)
-            batch_dis_refine = torch.zeros((_bs, 1), device=self.device)
 
             df_dict = {}
 
             tight_padded_img_batch = tight_image_batch(
                 img, device=self.device)
+
             pred_r, pred_t, pred_c, emb, ap_x = self.df_pose_estimator(
                 tight_padded_img_batch,
                 points,
                 choose,
                 idx)
+
             w = self.exp.get('model', {}).get('df_w_normal', 0.015)
             refine_start = self.exp.get('model', {}).get(
                 'df_refine', False)
@@ -288,125 +278,44 @@ class TrackNet6D(LightningModule):
                 target, model_points, idx,
                 points, w, refine_start, self.device)
 
-            _, which_max_xxx = torch.max(pred_c, 1)
+            _, which_max = torch.max(pred_c, 1)
+            which_max = which_max.squeeze(1)
+            pred_r_current = pred_r[0, which_max, :].squeeze(1)
 
-            pred_r_current_xxx = pred_r[0, which_max_xxx, :].squeeze(0)
-            pred_t_current_xxx = pred_t[0, which_max_xxx, :].squeeze(
-                0) + points[:, which_max_xxx, :]
+            important_points = torch.zeros((_bs, 3), device=self.device)
+            for _j in range(0, _bs - 1):
+                important_points[_j] = points[_j, which_max[_j], :]
+
+            pred_t_current = pred_t[0, which_max, :].squeeze(
+                0) + important_points
             if refine_start:
                 for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
-                    pred_r_xxx, pred_t_xxx = self.df_refiner(
+                    pred_r, pred_t = self.df_refiner(
                         new_points, emb, idx)
-                    dis_xxx, new_points_xxx, new_target_xxx = self.df_criterion_refine(
-                        pred_r_xxx, pred_t_xxx, new_target,
+                    df_ref_dis, new_points, new_target = self.df_criterion_refine(
+                        pred_r, pred_t, new_target,
                         model_points,
                         idx,
                         new_points, self.device)
+                    df_ref_dis2, new_points2, new_target2 = self.df_criterion_refine(
+                        pred_r[0].unsqueeze(0), pred_t[0].unsqueeze(
+                            0), new_target[0].unsqueeze(0),
+                        model_points[0].unsqueeze(0),
+                        idx[0].unsqueeze(0),
+                        new_points[0].unsqueeze(0), self.device, use_orig=True)
 
-            for i in range(0, _bs):
-                # f = self.env['p_ycb'] + \
-                #     f'/{unique_desig[0][i]}-df_prediction.pkl'
-                # if os.path.exists(f):
-                #     # Add this to dataloader instead
-                #     pkl_file = open(f, 'rb')
-                #     store = pickle.load(pkl_file)
-                #     pkl_file.close()
+                    pred_r_current = compose_quat(
+                        pred_r_current, pred_r)
+                    pred_t_current = pred_t_current + pred_t
 
-                #     batch_pred_r_total[i, :] = torch.from_numpy(
-                #         store['inital_pred_r'])
-                #     batch_pred_t_total[i, :] = torch.from_numpy(
-                #         store['inital_pred_t'])
-                #     batch_dis = torch.from_numpy(store['inital_pred_dis'])
-                #     try:
-                #         batch_pred_r_total[i, :] = torch.from_numpy(
-                #             store['refine_1_pred_r'])
-                #         batch_pred_t_total[i, :] = torch.from_numpy(
-                #             store['refine_1_pred_t'])
-                #         batch_dis_refine[i, :] = torch.from_numpy(
-                #             store['refine_1_dis'])
-
-                #     except:
-                #         logging.warning(
-                #             'Refinement data not available for ' + f)
-
-                #         # skipp applying DenseFusion network
-                #     continue
-
-                img_inp = ret_cropped_image(img[i]).unsqueeze(0)
-
-                pred_r, pred_t, pred_c, emb, ap_x = self.df_pose_estimator(
-                    img_inp,
-                    points[i].unsqueeze(0),
-                    choose[i].unsqueeze(0),
-                    idx[i].unsqueeze(0))
-
-                # store pose estimator output
-                batch_pred_r[i, :, :] = pred_r
-                batch_pred_t[i, :, :] = pred_t
-                batch_pred_c[i, :, :] = pred_c
-
-                refine_start = self.exp.get('model', {}).get(
-                    'df_refine', False)
-                w = self.exp.get('model', {}).get('df_w_normal', 0.015)
-
-                loss, dis, new_points, new_target = self.df_criterion(
-                    pred_r, pred_t, pred_c,
-                    target[i, :, :].unsqueeze(0),
-                    model_points[i, :, :].unsqueeze(0),
-                    idx[i, :].unsqueeze(0),
-                    points[i, :, :].unsqueeze(0), w, refine_start, self.device)
-
-                batch_loss[i, :] = loss
-                batch_dis[i, :] = dis
-
-                _, which_max = torch.max(pred_c, 1)
-                pred_r_current = pred_r[0, which_max, :].squeeze(0)
-                pred_t_current = pred_t[0, which_max, :].squeeze(
-                    0) + points[i, which_max, :]
-
-                store = {'inital_pred_r': pred_r[0, which_max, :].squeeze(0).cpu().detach().numpy(),
-                         'inital_pred_t': pred_t[0, which_max, :].squeeze(0).cpu().detach().numpy(),
-                         'inital_pred_loss': loss.cpu().detach().numpy(),
-                         'inital_pred_dis': dis.cpu().detach().numpy()}
-
-                if refine_start:
-                    for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
-                        pred_r, pred_t = self.df_refiner(
-                            new_points, emb, idx[i].unsqueeze(0))
-                        dis, new_points, new_target = self.df_criterion_refine(
-                            pred_r, pred_t, new_target,
-                            model_points[i, :, :].unsqueeze(0),
-                            idx[i, :].unsqueeze(0),
-                            new_points, self.device, use_orig=True)
-
-                        pred_r_current = compose_quat(
-                            pred_r_current, pred_r)
-                        pred_t_current = pred_t_current + pred_t
-
-                        batch_dis_refine[i, :] = dis
-                        batch_pred_r_total[i, :] = pred_r_current
-                        batch_pred_t_total[i, :] = pred_t_current
-
-                        store[f'refine_{ite}_pred_r'] = pred_r_current.cpu(
-                        ).detach().numpy()
-                        store[f'refine_{ite}_pred_t'] = pred_t_current.cpu(
-                        ).detach().numpy()
-                        store[f'refine_{ite}_dis'] = dis.cpu().detach().numpy()
-                else:
-                    batch_pred_r_total[i, :] = pred_r_current
-                    batch_pred_t_total[i, :] = pred_t_current
-        if self.exp.get('model', {}).get(
-                'df_dump_pred_pickle', {False}):
-            f = self.env['p_ycb'] + f'/{unique_desig[0][i]}-df_prediction.pkl'
-            output = open(f, 'wb')
-            pickle.dump(store, output)
-            output.close()
+        st2 = time.time()
+        # print('Took DF for batch', st2 - st)
 
         mode = self.exp.get('model', {}).get(
             'inital_pose', {}).get('mode', {'TransNoise'})
         if mode == 'DenseFusionInit':
-            pred_rot_wxyz = batch_pred_r_total
-            pred_trans = batch_pred_t_total
+            pred_rot_wxyz = pred_r_current
+            pred_trans = pred_t_current
         elif mode == 'TransNoise':
             pred_rot_wxyz = gt_rot_wxyz
             pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
@@ -435,7 +344,10 @@ class TrackNet6D(LightningModule):
         h = 480
         bs = img.shape[0]
 
+        valid_samples = torch.ones((_bs), device=self.device, dtype=torch.bool)
+
         for i in range(0, refine_iterations):
+
             # check if the current estimate of the objects position is within some bound
             # translation bounding:
             deviation = torch.abs(torch.norm(pred_trans - gt_trans, dim=1))
@@ -447,7 +359,10 @@ class TrackNet6D(LightningModule):
             deviation_post = torch.abs(
                 torch.norm(pred_trans - gt_trans, dim=1))
             if torch.sum(deviation) != torch.sum(deviation_post):
-                print("violated limit 0.3")
+                # valid_samples[i] = False
+                # TODO what to do here if limit is violated (I guess noting)
+                # print("violated limit 0.3")
+                pass
 
             render_img = torch.empty((bs, 3, h, w), device=self.device)
             # preper render data
@@ -455,12 +370,13 @@ class TrackNet6D(LightningModule):
             img_ren, depth, h_render = self.vm.get_closest_image_batch(
                 i=idx, rot=pred_rot_wxyz, conv='wxyz')
 
-            # print(f'Total Time VM blocking {time.time()-st}')
             bb_lsd = get_bb_from_depth(depth)
             for j, b in enumerate(bb_lsd):
-                if not b.check_min_size():
-                    print("the bounding box violates the min size constrain")
-                    print(b)
+                tl, br = b.limit_bb()
+                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30:
+                    valid_samples[j] = False
+                    b.set_max()
+                    # print("BoundingBox violated the min size constrain")
 
                 center_ren = backproject_points(
                     h_render[j, :3, 3].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
@@ -480,9 +396,12 @@ class TrackNet6D(LightningModule):
             # update the target to get new bb
             bb_ls = get_bb_real_target(pred_points, cam, pred_trans)
             for j, b in enumerate(bb_ls):
-                if not b.check_min_size():
-                    print("the bounding box violates the min size constrain")
-                    print(b)
+
+                tl, br = b.limit_bb()
+                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30:
+                    valid_samples[j] = False
+                    b.set_max()
+                    # print("BoundingBox violated the min size constrain")
 
                 center_real = backproject_points(
                     pred_trans[j].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
@@ -520,15 +439,13 @@ class TrackNet6D(LightningModule):
             f2, f3, f4, f5, f6, delta_v, delta_rot_wxyz = self.refiner(
                 data, idx)
 
-            delta_rot_wxyz
-
             # Update translation prediction
             pred_trans_new = get_delta_t_in_euclidean(
                 delta_v.clone(), t_src=pred_trans.clone(),
                 fx=cam[:, 2].unsqueeze(1), fy=cam[:, 3].unsqueeze(1), device=self.device)
 
             if torch.isnan(pred_trans_new).any():
-                print(pred_trans_new, pred_trans, delta_v)
+                # print(pred_trans_new, pred_trans, delta_v)
                 assert Exception
 
             delta_t = pred_trans_new - pred_trans
@@ -559,15 +476,19 @@ class TrackNet6D(LightningModule):
         # Compute ADD / ADD-S loss
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
                                   target=target, model_points=model_points, idx=idx)
+        dis = dis * valid_samples
+        if exp.get('model', {}).get('df_refine', False):
+            df_dict[f'df_ref_dis'] = float(
+                torch.mean(df_ref_dis, dim=0).detach())
 
-        df_dict[f'df_dis_refine_avg_batch'] = torch.mean(
-            batch_dis_refine, dim=0).detach()
-        df_dict['df_loss_pose_est_avg_batch'] = torch.mean(
-            batch_loss, dim=0).detach()
-        df_dict['df_dis_pose_est_avg_batch'] = torch.mean(
-            batch_dis, dim=0).detach()
+        df_dict[f'df_ref_dis'] = float(
+            torch.mean(df_ref_dis, dim=0).detach())
+        # df_dict['df_loss_pose_est_avg_batch'] = torch.mean(
+        #     batch_loss, dim=0).detach()
+        df_dict['df_dis'] = float(torch.mean(
+            dis, dim=0).detach())
 
-        return dis, pred_rot_wxyz, pred_trans, df_dict
+        return dis, pred_rot_wxyz.detach(), pred_trans.detach(), df_dict
 
     def training_step(self, batch, batch_idx):
         self.visu_forward = False
@@ -881,7 +802,7 @@ class TrackNet6D(LightningModule):
                                                        shuffle=True,
                                                        num_workers=self.exp[
                                                            'loader']['workers'],
-                                                       pin_memory=True)
+                                                       pin_memory=self.pin_mem)
 
         store = self.env['p_ycb'] + '/viewpoints_renderings'
         if self.vm is None:
@@ -913,7 +834,7 @@ class TrackNet6D(LightningModule):
                                                       batch_size=self.exp['loader']['batch_size'],
                                                       shuffle=False,
                                                       num_workers=self.exp['loader']['workers'],
-                                                      pin_memory=True)
+                                                      pin_memory=self.pin_mem)
         return dataloader_test
 
     def val_dataloader(self):
@@ -943,7 +864,7 @@ class TrackNet6D(LightningModule):
                                                      batch_size=self.exp['loader']['batch_size'],
                                                      shuffle=False,
                                                      num_workers=self.exp['loader']['workers'],
-                                                     pin_memory=True)
+                                                     pin_memory=self.pin_mem)
         return dataloader_val
 
 

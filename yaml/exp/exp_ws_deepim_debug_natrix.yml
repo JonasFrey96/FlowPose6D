@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/joint_refinement/train_6obj/_" #debug
+model_path: "/media/scratch1/jonfrey/models/runs/joint_refinement/debug/_" #debug
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
@@ -46,8 +46,8 @@ training:
   max_epochs: 100
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 2000
-  limit_val_batches: 200
+  limit_train_batches: 10
+  limit_val_batches: 10
 
 visu:
   number_images_log_test: 1
@@ -64,8 +64,8 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 16
-  workers: 0
+  batch_size: 8
+  workers: 4
 
 d_test:
   name: "ycb"

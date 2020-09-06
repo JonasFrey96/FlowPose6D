@@ -73,15 +73,18 @@ def knn(ref, query):
 
 
 def loss_calculation2(pred_r, pred_t, target, model_points, idx, points, num_point_mesh, sym_list, device):
+    s = 1
+    d, np, nt = loss_calculation_orig(pred_r[s].unsqueeze(0), pred_t[s].unsqueeze(0), target[s].unsqueeze(
+        0), model_points[s].unsqueeze(0), idx[s].unsqueeze(0), points[s].unsqueeze(0), num_point_mesh, sym_list, device)
+
     bs, _ = pred_r.size()
     num_p = len(points[0])
     pred_r = pred_r / (torch.norm(pred_r, dim=1).view(bs, 1))
     base = quat_to_rot(pred_r.contiguous().view(-1, 4),
                        'wxyz', device=device)
-
+    ori_base = base
     base = base.contiguous().transpose(2, 1).unsqueeze(
         0).contiguous().view(-1, 3, 3)
-    ori_base = base
 
     model_points = model_points.view(
         bs, 1, num_point_mesh, 3).view(bs, num_point_mesh, 3)
