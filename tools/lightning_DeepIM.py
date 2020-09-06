@@ -102,6 +102,55 @@ def get_bb_real_target(target, cam, gt_trans):
 
     return bb_ls
 
+# TODO Move if finalized to other files
+
+
+def ret_cropped_image(img):
+    test = torch.nonzero(img[:, :, :])
+    a = torch.max(test[:, 0]) + 1
+    b = torch.max(test[:, 1]) + 1
+    c = torch.max(test[:, 2]) + 1
+    return img[:a, :b, :c]
+
+# TODO Move if finalized to other files
+
+
+def padded_cat(list_of_images, device):
+    """returns torch.tensor of concatenated images with dim = max size of image padded with zeros
+
+    Args:
+        list_of_images ([type]): List of Images Channels x Heigh x Width
+
+    Returns:
+        padded_cat [type]: Tensor of concatination result len(list_of_images) x Channels x max(Height) x max(Width)
+        valid_indexe: len(list_of_images) x 2
+    """
+    c = list_of_images[0].shape[0]
+    h = [x.shape[1] for x in list_of_images]
+    w = [x.shape[2] for x in list_of_images]
+    max_h = max(h)
+    max_w = max(w)
+    padded_cat = torch.zeros(
+        (len(list_of_images), c, max_h, max_w), device=device)
+    for i, img in enumerate(list_of_images):
+        padded_cat[i, :, :h[i], :w[i]] = img
+
+    valid_indexes = torch.tensor([h, w], device=device)
+    return padded_cat, valid_indexes
+
+# TODO Move if finalized to other files
+
+
+def tight_image_batch(img_batch, device):
+    ls = []
+    for i in range(img_batch.shape[0]):
+        ls.append(ret_cropped_image(img_batch[i]))
+
+    tight_padded_img_batch, valid_indexes = padded_cat(
+        ls,
+        device=device)
+    return tight_padded_img_batch
+
 
 def check_exp(exp):
     if exp['model']['inital_pose']['mode'] == 'DenseFusionInit' and not exp['model']['df_load']:
@@ -223,97 +272,73 @@ class TrackNet6D(LightningModule):
 
             df_dict = {}
 
+            tight_padded_img_batch = tight_image_batch(
+                img, device=self.device)
+            pred_r, pred_t, pred_c, emb, ap_x = self.df_pose_estimator(
+                tight_padded_img_batch,
+                points,
+                choose,
+                idx)
+            w = self.exp.get('model', {}).get('df_w_normal', 0.015)
+            refine_start = self.exp.get('model', {}).get(
+                'df_refine', False)
+
+            loss, dis, new_points, new_target = self.df_criterion(
+                pred_r, pred_t, pred_c,
+                target, model_points, idx,
+                points, w, refine_start, self.device)
+
+            _, which_max_xxx = torch.max(pred_c, 1)
+
+            pred_r_current_xxx = pred_r[0, which_max_xxx, :].squeeze(0)
+            pred_t_current_xxx = pred_t[0, which_max_xxx, :].squeeze(
+                0) + points[:, which_max_xxx, :]
+            if refine_start:
+                for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
+                    pred_r_xxx, pred_t_xxx = self.df_refiner(
+                        new_points, emb, idx)
+                    dis_xxx, new_points_xxx, new_target_xxx = self.df_criterion_refine(
+                        pred_r_xxx, pred_t_xxx, new_target,
+                        model_points,
+                        idx,
+                        new_points, self.device)
+
             for i in range(0, _bs):
-                f = self.env['p_ycb'] + \
-                    f'/{unique_desig[0][i]}-df_prediction.pkl'
-                if os.path.exists(f):
-                    # Add this to dataloader instead
-                    pkl_file = open(f, 'rb')
-                    store = pickle.load(pkl_file)
-                    pkl_file.close()
+                # f = self.env['p_ycb'] + \
+                #     f'/{unique_desig[0][i]}-df_prediction.pkl'
+                # if os.path.exists(f):
+                #     # Add this to dataloader instead
+                #     pkl_file = open(f, 'rb')
+                #     store = pickle.load(pkl_file)
+                #     pkl_file.close()
 
-                    batch_pred_r_total[i, :] = torch.from_numpy(
-                        store['inital_pred_r'])
-                    batch_pred_t_total[i, :] = torch.from_numpy(
-                        store['inital_pred_t'])
-                    batch_dis = torch.from_numpy(store['inital_pred_dis'])
-                    try:
-                        batch_pred_r_total[i, :] = torch.from_numpy(
-                            store['refine_1_pred_r'])
-                        batch_pred_t_total[i, :] = torch.from_numpy(
-                            store['refine_1_pred_t'])
-                        batch_dis_refine[i, :] = torch.from_numpy(
-                            store['refine_1_dis'])
+                #     batch_pred_r_total[i, :] = torch.from_numpy(
+                #         store['inital_pred_r'])
+                #     batch_pred_t_total[i, :] = torch.from_numpy(
+                #         store['inital_pred_t'])
+                #     batch_dis = torch.from_numpy(store['inital_pred_dis'])
+                #     try:
+                #         batch_pred_r_total[i, :] = torch.from_numpy(
+                #             store['refine_1_pred_r'])
+                #         batch_pred_t_total[i, :] = torch.from_numpy(
+                #             store['refine_1_pred_t'])
+                #         batch_dis_refine[i, :] = torch.from_numpy(
+                #             store['refine_1_dis'])
 
-                    except:
-                        logging.warning(
-                            'Refinement data not available for ' + f)
+                #     except:
+                #         logging.warning(
+                #             'Refinement data not available for ' + f)
 
-                        # skipp applying DenseFusion network
-                    continue
-
-                def ret_cropped_image(img):
-                    test = torch.nonzero(img[:, :, :])
-                    a = torch.max(test[:, 0]) + 1
-                    b = torch.max(test[:, 1]) + 1
-                    c = torch.max(test[:, 2]) + 1
-                    return img[:a, :b, :c]
-
-                def padded_cat(list_of_images, device):
-                    """returns torch.tensor of concatenated images with dim = max size of image padded with zeros
-
-                    Args:
-                        list_of_images ([type]): List of Images Channels x Heigh x Width
-
-                    Returns:
-                        padded_cat [type]: Tensor of concatination result len(list_of_images) x Channels x max(Height) x max(Width)
-                        valid_indexe: len(list_of_images) x 2
-                    """
-                    c = list_of_images[0].shape[0]
-                    h = [x.shape[1] for x in list_of_images]
-                    w = [x.shape[2] for x in list_of_images]
-                    max_h = max(h)
-                    max_w = max(w)
-                    padded_cat = torch.zeros(
-                        (len(list_of_images), c, max_h, max_w), device=device)
-                    for i, img in enumerate(list_of_images):
-                        padded_cat[i, :, :h[i], :w[i]] = img
-
-                    valid_indexes = torch.tensor([h, w], device=device)
-                    return padded_cat, valid_indexes
-
-                def tight_image_batch(img_batch, device):
-                    ls = []
-                    for i in range(img_batch.shape[0]):
-                        ls.append(ret_cropped_image(img[i]))
-
-                    tight_padded_img_batch, valid_indexes = padded_cat(
-                        ls,
-                        device=self.device)
-                    return tight_padded_img_batch
-
-                tight_padded_img_batch = tight_image_batch(
-                    img, device=self.device)
+                #         # skipp applying DenseFusion network
+                #     continue
 
                 img_inp = ret_cropped_image(img[i]).unsqueeze(0)
-                st = time.time()
 
                 pred_r, pred_t, pred_c, emb, ap_x = self.df_pose_estimator(
                     img_inp,
                     points[i].unsqueeze(0),
                     choose[i].unsqueeze(0),
                     idx[i].unsqueeze(0))
-
-                st2 = time.time()
-                # test of higher batch size is valid
-                pred_r2, pred_t2, pred_c2, emb2, ap_x2 = self.df_pose_estimator(
-                    tight_padded_img_batch,
-                    points,
-                    choose,
-                    idx)
-                st3 = time.time()
-
-                print(f'1 batch{st2-st} s, 10batches {st3-st2} s')
 
                 # store pose estimator output
                 batch_pred_r[i, :, :] = pred_r
@@ -346,12 +371,13 @@ class TrackNet6D(LightningModule):
 
                 if refine_start:
                     for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
-                        pred_r, pred_t = self.df_refiner(new_points, emb, idx)
+                        pred_r, pred_t = self.df_refiner(
+                            new_points, emb, idx[i].unsqueeze(0))
                         dis, new_points, new_target = self.df_criterion_refine(
                             pred_r, pred_t, new_target,
                             model_points[i, :, :].unsqueeze(0),
                             idx[i, :].unsqueeze(0),
-                            new_points, self.device)
+                            new_points, self.device, use_orig=True)
 
                         pred_r_current = compose_quat(
                             pred_r_current, pred_r)

@@ -211,8 +211,7 @@ class PoseRefineNet(nn.Module):
         rx = self.conv3_r(rx).view(bs, self.num_obj, 4)
         tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
 
-        b = 0
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
+        out_rx = batched_index_select(t=rx, inds=obj, dim=1).squeeze(1)
+        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1)
 
         return out_rx, out_tx

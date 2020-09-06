@@ -33,13 +33,16 @@ def loss_calculation2(pred_r, pred_t, pred_c, target, model_points, idx, points,
     bs, num_p, _ = pred_c.size()
 
     pred_r = pred_r / (torch.norm(pred_r, dim=2).view(bs, num_p, 1))
-    base = quat_to_rot(pred_r.squeeze(0), 'wxyz', device=device)
-    ori_base = base
+    base = quat_to_rot(pred_r.contiguous().view(-1, 4),
+                       'wxyz', device=device)
     base = base.contiguous().transpose(2, 1).contiguous()
+    ori_base = base
+
     model_points = model_points.view(bs, 1, num_point_mesh, 3).repeat(
         1, num_p, 1, 1).view(bs * num_p, num_point_mesh, 3)
     target = target.view(bs, 1, num_point_mesh, 3).repeat(
         1, num_p, 1, 1).view(bs * num_p, num_point_mesh, 3)
+
     ori_target = target
     pred_t = pred_t.contiguous().view(bs * num_p, 1, 3)
     ori_t = pred_t
@@ -72,15 +75,20 @@ def loss_calculation2(pred_r, pred_t, pred_c, target, model_points, idx, points,
     how_max, which_max = torch.max(pred_c, 1)
     dis = dis.view(bs, num_p)
 
-    t = ori_t[which_max[0]] + points[which_max[0]]
+    t = ori_t[which_max] + points[which_max]
     points = points.view(1, bs * num_p, 3)
 
-    ori_base = ori_base[which_max[0]].view(1, 3, 3).contiguous()
-    ori_t = t.repeat(bs * num_p, 1).contiguous().view(1, bs * num_p, 3)
-    new_points = torch.bmm((points - ori_t), ori_base).contiguous()
+    ori_base = ori_base[which_max].view(bs, 3, 3).contiguous()
+    ori_t = t.repeat(1, num_p, 1).contiguous().view(1, bs * num_p, 3)
+    new_points = torch.bmm(
+        (points - ori_t).view(bs, num_p, 3), ori_base).contiguous().view(bs, num_p, 3)
 
-    new_target = ori_target[0].view(1, num_point_mesh, 3).contiguous()
-    ori_t = t.repeat(num_point_mesh, 1).contiguous().view(1, num_point_mesh, 3)
+    tmp1 = ori_target.view(bs, num_p, num_point_mesh, 3)
+    new_target = tmp1[:, 0, :, :].view(bs, num_point_mesh, 3).contiguous()
+
+    ori_t = t.repeat(1, num_point_mesh, 1).contiguous().view(
+        bs, num_point_mesh, 3)
+
     new_target = torch.bmm((new_target - ori_t), ori_base).contiguous()
 
     # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
