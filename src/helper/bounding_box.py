@@ -148,9 +148,6 @@ class BoundingBox():
 
             off_h = int(h)
             off_w = int(w)
-            img_pad[:, :, 0] = 0
-            img_pad[:, :, 1] = 255
-            img_pad[:, :, 2] = 0
             _tl, _br = self.limit_bb()
             img_pad[off_h + int(_tl[0]): off_h + int(_br[0]), off_w + int(_tl[1]):off_w + int(
                 _br[1]), :] = img[int(_tl[0]):int(_br[0]), int(_tl[1]):int(_br[1]), :]

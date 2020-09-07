@@ -22,6 +22,10 @@ import io
 from visu import save_image
 from helper import re_quat
 from helper import BoundingBox
+from matplotlib import cm
+jet = cm.get_cmap('jet')
+SEG_COLORS = (np.stack([jet(v)
+                        for v in np.linspace(0, 1, 22)]) * 255).astype(np.uint8)
 
 
 def backproject_points(p, fx, fy, cx, cy):
@@ -135,6 +139,21 @@ class Visualizer():
         if self.writer is not None:
             self.writer.add_image(tag, img_f.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
+
+    def plot_segmentation(self, tag, epoch, label, store):
+        if label.dtype == np.float32:
+            label = label.round()
+        image_out = np.zeros(
+            (label.shape[0], label.shape[1], 3), dtype=np.uint8)
+        for h in range(label.shape[0]):
+            for w in range(label.shape[1]):
+                image_out[h, w, :] = SEG_COLORS[int(label[h, w])][:3]
+        if store:
+            save_image(
+                image_out, tag=f"segmentation_epoch_{epoch}_{tag}", p_store=self.p_visu)
+        if self.writer is not None:
+            self.writer.add_image(
+                tag, image_out, global_step=epoch, dataformats="HWC")
 
     def plot_estimated_pose(self,
                             tag,

@@ -25,6 +25,7 @@ model:
     render_mask: True
     real_depth_mask: True
     render_depth_mask: True
+  sem_seg: True
 
 epochs: 500
 lr: 5.0892961308540394e-07
@@ -78,13 +79,13 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2000
   num_pt_mesh_large: 2300
-  obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general
+  obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
     - 12
-    - 13
-    - 14
-    - 15
-    - 16
-    - 17
+    # - 13
+    # - 14
+    # - 15
+    # - 16
+    # - 17
   obj_list_sym:
     - 12
     - 15
@@ -120,11 +121,11 @@ d_train:
   num_pt_mesh_large: 2300
   obj_list_fil: # if not null add list with specific elements
     - 12
-    - 13
-    - 14
-    - 15
-    - 16
-    - 17
+    # - 13
+    # - 14
+    # - 15
+    # - 16
+    # - 17
   obj_list_sym:
     - 12
     - 15

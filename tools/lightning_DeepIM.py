@@ -58,7 +58,7 @@ from helper import get_delta_t_in_euclidean
 from helper import backproject_points_batch, backproject_points, backproject_point
 from deep_im import LossAddS
 from rotations import *
-from deepim_modified import PixelwiseRefiner
+from pixelwise_refiner import PixelwiseRefiner
 
 
 def get_ref_ite(exp):
@@ -257,7 +257,7 @@ class TrackNet6D(LightningModule):
         self.best_validation_patience = 5
         self.early_stopping_value = 0.1
 
-        self.Visu = None
+        self.visualizer = None
         self._dict_track = {}
 
         self.number_images_log_test = self.exp.get(
@@ -272,6 +272,9 @@ class TrackNet6D(LightningModule):
         logging.getLogger("lightning").addHandler(fh)
 
     def forward(self, batch):
+        if self.visualizer is None:
+            self.visualizer = Visualizer(self.exp['model_path'] +
+                                         '/visu/', self.logger.experiment)
 
         # unpack batch
         points, choose, img, target, model_points, idx = batch[0:6]
@@ -372,8 +375,6 @@ class TrackNet6D(LightningModule):
                 torch.norm(pred_trans - gt_trans, dim=1))
             if torch.sum(deviation) != torch.sum(deviation_post):
                 # valid_samples[i] = False
-                # TODO what to do here if limit is violated (I guess noting)
-                # print("violated limit 0.3")
                 pass
 
             render_img = torch.empty((bs, 3, h, w), device=self.device)
@@ -405,6 +406,8 @@ class TrackNet6D(LightningModule):
 
             # prepare real data
             real_img = torch.empty((bs, 3, h, w), device=self.device)
+            if self.exp['model'].get('sem_seg', False):
+                sem_seg = torch.empty((bs, 1, h, w), device=self.device)
             # update the target to get new bb
             bb_ls = get_bb_real_target(pred_points, cam, pred_trans)
             for j, b in enumerate(bb_ls):
@@ -428,61 +431,101 @@ class TrackNet6D(LightningModule):
                 crop_real = torch.transpose(crop_real, 2, 3)
                 real_img[j] = up(crop_real)
 
+                if self.exp['model'].get('sem_seg', False):
+                    crop_sem_seg = b.crop(
+                        label_img[j].unsqueeze(2)).unsqueeze(0)
+                    crop_sem_seg = torch.transpose(crop_sem_seg, 1, 3)
+                    crop_sem_seg = torch.transpose(crop_sem_seg, 2, 3)
+
+                    sem_seg[j] = torch.round(up(crop_sem_seg.type(
+                        torch.float32)).clamp(0, self.exp['d_train']['objects']))
+
             # stack the two images, might add additional mask as layer or depth info
             data = torch.cat([real_img, render_img], dim=1)
 
-            data = prepare_batch(**locals())
+            delta_v, rotations, segmentation = self.pixelwise_refiner(
+                data, idx)
+            seg_max = segmentation.argmax(dim=1)
 
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
-                self.Visu.visu_network_input(tag="network_input",
-                                             epoch=self.current_epoch,
-                                             data=data,
-                                             max_images=10,
-                                             store=True,
-                                             jupyter=False)
-                self.Visu.plot_batch_projection(tag='batch_projection',
-                                                epoch=self.current_epoch,
-                                                images=img_orig,
-                                                target=pred_points,
-                                                cam=cam,
-                                                max_images=10,
-                                                store=True,
-                                                jupyter=False)
+                label = torch.transpose(sem_seg[0], 1, 2)
+                label = torch.transpose(label, 0, 2)
+                self.visualizer.plot_segmentation(tag='gt_segmentation_cropped',
+                                                  epoch=self.current_epoch,
+                                                  label=label.cpu().numpy(),
+                                                  store=True)
+                self.visualizer.plot_segmentation(tag='gt_segmentation',
+                                                  epoch=self.current_epoch,
+                                                  label=label_img[0].cpu(
+                                                  ).numpy(),
+                                                  store=True)
+                self.visualizer.plot_segmentation(tag='predicted_segmentation',
+                                                  epoch=self.current_epoch,
+                                                  label=torch.round(seg_max[0]).cpu(
+                                                  ).numpy(),
+                                                  store=True)
+                self.visualizer.visu_network_input(tag="network_input",
+                                                   epoch=self.current_epoch,
+                                                   data=data,
+                                                   max_images=10,
+                                                   store=True,
+                                                   jupyter=False)
+                self.visualizer.plot_batch_projection(tag='batch_projection',
+                                                      epoch=self.current_epoch,
+                                                      images=img_orig,
+                                                      target=pred_points,
+                                                      cam=cam,
+                                                      max_images=10,
+                                                      store=True,
+                                                      jupyter=False)
 
-            trans, rotations, segmentation = self.refiner_pixelwise(
-                data, idx)
-
-            # Update translation prediction
+            # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
+            # 1. Update translation prediction
+            shape_orig = delta_v.shape
+            delta_v2 = delta_v.contiguous().view(-1, 3).contiguous()
+            pred_trans_batch = pred_trans.unsqueeze(2).unsqueeze(2).repeat(
+                1, 1, shape_orig[2], shape_orig[3]).contiguous().view(-1, 3).contiguous()
+            cam_batch = cam.unsqueeze(2).unsqueeze(2).repeat(
+                1, 1, shape_orig[2], shape_orig[3]).contiguous().view(-1, 4).contiguous()
+            # image coordinates to euclidean distance
             pred_trans_new = get_delta_t_in_euclidean(
-                delta_v.clone(), t_src=pred_trans.clone(),
-                fx=cam[:, 2].unsqueeze(1), fy=cam[:, 3].unsqueeze(1), device=self.device)
-
-            if torch.isnan(pred_trans_new).any():
-                # print(pred_trans_new, pred_trans, delta_v)
-                assert Exception
-
-            delta_t = pred_trans_new - pred_trans
+                delta_v2, t_src=pred_trans_batch,
+                fx=cam_batch[:, 2].unsqueeze(1), fy=cam_batch[:, 3].unsqueeze(1), device=self.device)
+            delta_t = pred_trans_new - pred_trans_batch
+            delta_t = delta_t.contiguous().view(shape_orig)
             # delta_t can be used for bookkeeping to keep track of the translation
-
             # limit delta_t to be within 10cm
             val = self.exp.get('training', {}).get('clamp_delta_t_pred', 0.1)
             delta_t_clamp = torch.clamp(delta_t, -val, val)
+            pred_trans_batch = pred_trans_batch.view(
+                shape_orig) + delta_t_clamp
+            # calculate based on predicted semantic segmentation the pred_trans_mean
+            true_res = idx.unsqueeze(2).unsqueeze(3).repeat(
+                1, 1, shape_orig[2], shape_orig[3])
+            object_cor = sem_seg == idx.unsqueeze(2).unsqueeze(3).repeat(
+                1, 1, shape_orig[2], shape_orig[3])
+            valid_sum = torch.sum(object_cor.view(_bs, -1), dim=1)
+            pred_trans_batch_valid = object_cor.repeat(
+                1, 3, 1, 1) * pred_trans_batch
+            pred_trans_mean = torch.sum(
+                pred_trans_batch_valid.view(_bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
 
-            pred_trans = pred_trans + delta_t_clamp
+            # 2. Update rotation
+            # Quaternion averageing base on http://www.acsu.buffalo.edu/~johnc/ave_quat07.pdf
+            # https://github.com/christophhagen/averaging-quaternions
+            # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
+            identity = torch.zeros(rotations.shape, device=self.device)
+            identity[:, 0, :, :] = 1
+            rotations_valid = object_cor.repeat(
+                1, 4, 1, 1) * (rotations + identity)
+            rotations_mean = torch.sum(
+                rotations_valid.view(_bs, 4, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 4)
+            pred_rot_wxyz = compose_quat(pred_rot_wxyz, rotations_mean)
 
-            # start with identity network output
-            identity = torch.zeros(pred_rot_wxyz.shape, device=self.device)
-            identity[:, 0] = 1
-            pred_rot_wxyz = pred_rot_wxyz + identity
-
-            # Update rotation prediction
-            pred_rot_wxyz = compose_quat(pred_rot_wxyz, delta_rot_wxyz)
-
-            # Update pred_points
+            # 3. Update pred_points
             base_new = quat_to_rot(
                 pred_rot_wxyz, 'wxyz', device=self.device).unsqueeze(1)
-            base_new = base_new.view(-1, 3, 3).permute(0,
-                                                       2, 1)  # transposed of R
+            base_new = base_new.view(-1, 3, 3).permute(0, 2, 1)
             pred_points = torch.add(
                 torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
 
@@ -500,6 +543,8 @@ class TrackNet6D(LightningModule):
                 df_dict[f'df_ref_dis'] = float(
                     torch.mean(df_ref_dis, dim=0).detach())
 
+        if torch.isnan(dis).any():
+            assert Exception
         return dis, pred_rot_wxyz.detach(), pred_trans.detach(), df_dict
 
     def training_step(self, batch, batch_idx):
@@ -679,53 +724,52 @@ class TrackNet6D(LightningModule):
             **avg_dict, 'log': avg_dict}
 
     def visu_pose(self, batch_idx, pred_r, pred_t, target, model_points, cam, img_orig, unique_desig, idx, store=True):
-        if self.Visu is None:
-            self.Visu = Visualizer(self.exp['model_path'] +
-                                   '/visu/', self.logger.experiment)
-
+        if self.visualizer is None:
+            self.visualizer = Visualizer(self.exp['model_path'] +
+                                         '/visu/', self.logger.experiment)
         points = copy.deepcopy(target.detach().cpu().numpy())
         img = img_orig.detach().cpu().numpy()
-        self.Visu.plot_estimated_pose(tag='gt_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                      epoch=self.current_epoch,
-                                      img=img,
-                                      points=points,
-                                      cam_cx=float(cam[0]),
-                                      cam_cy=float(cam[1]),
-                                      cam_fx=float(cam[2]),
-                                      cam_fy=float(cam[3]),
-                                      store=store)
-        self.Visu.plot_contour(tag='gt_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                               epoch=self.current_epoch,
-                               img=img,
-                               points=points,
-                               cam_cx=float(cam[0]),
-                               cam_cy=float(cam[1]),
-                               cam_fx=float(cam[2]),
-                               cam_fy=float(cam[3]),
-                               store=store)
+        self.visualizer.plot_estimated_pose(tag='gt_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+                                            epoch=self.current_epoch,
+                                            img=img,
+                                            points=points,
+                                            cam_cx=float(cam[0]),
+                                            cam_cy=float(cam[1]),
+                                            cam_fx=float(cam[2]),
+                                            cam_fy=float(cam[3]),
+                                            store=store)
+        self.visualizer.plot_contour(tag='gt_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+                                     epoch=self.current_epoch,
+                                     img=img,
+                                     points=points,
+                                     cam_cx=float(cam[0]),
+                                     cam_cy=float(cam[1]),
+                                     cam_fx=float(cam[2]),
+                                     cam_fy=float(cam[3]),
+                                     store=store)
 
         t = pred_t.detach().cpu().numpy()
         r = pred_r.detach().cpu().numpy()
         rot = R.from_quat(re_quat(r, 'wxyz'))
 
-        self.Visu.plot_estimated_pose(tag='pred_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                      epoch=self.current_epoch,
-                                      img=img,
-                                      points=copy.deepcopy(
-                                          model_points[:, :].detach(
-                                          ).cpu().numpy()),
-                                      trans=t.reshape((1, 3)),
-                                      rot_mat=rot.as_matrix(),
-                                      cam_cx=float(cam[0]),
-                                      cam_cy=float(cam[1]),
-                                      cam_fx=float(cam[2]),
-                                      cam_fy=float(cam[3]),
-                                      store=store)
+        self.visualizer.plot_estimated_pose(tag='pred_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+                                            epoch=self.current_epoch,
+                                            img=img,
+                                            points=copy.deepcopy(
+            model_points[:, :].detach(
+            ).cpu().numpy()),
+            trans=t.reshape((1, 3)),
+            rot_mat=rot.as_matrix(),
+            cam_cx=float(cam[0]),
+            cam_cy=float(cam[1]),
+            cam_fx=float(cam[2]),
+            cam_fy=float(cam[3]),
+            store=store)
 
-        self.Visu.plot_contour(tag='pred_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                               epoch=self.current_epoch,
-                               img=img,
-                               points=copy.deepcopy(
+        self.visualizer.plot_contour(tag='pred_contour_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+                                     epoch=self.current_epoch,
+                                     img=img,
+                                     points=copy.deepcopy(
             model_points[:, :].detach(
             ).cpu().numpy()),
             trans=t.reshape((1, 3)),
@@ -778,10 +822,10 @@ class TrackNet6D(LightningModule):
         data = torch.cat([inp, render_img], dim=3)
         data = torch.transpose(data, 1, 3)
         data = torch.transpose(data, 2, 3)
-        self.Visu.visu_network_input(tag='render_real_comp_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
-                                     epoch=self.current_epoch,
-                                     data=data,
-                                     max_images=1, store=store)
+        self.visualizer.visu_network_input(tag='render_real_comp_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
+                                           epoch=self.current_epoch,
+                                           data=data,
+                                           max_images=1, store=store)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -844,7 +888,7 @@ class TrackNet6D(LightningModule):
 
         dataloader_test = torch.utils.data.DataLoader(dataset_test,
                                                       batch_size=self.exp['loader']['batch_size'],
-                                                      shuffle=False,
+                                                      shuffle=True,
                                                       num_workers=self.exp['loader']['workers'],
                                                       pin_memory=self.pin_mem)
         return dataloader_test
