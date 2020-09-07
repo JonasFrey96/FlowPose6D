@@ -20,9 +20,14 @@ model:
   inital_pose:
     mode: "DenseFusionInit" # 'TransNoise' 'RotTransNoise'  'RotNoise'
     translation_noise_inital: 0.03
+  mask:
+    real_mask: True
+    render_mask: True
+    real_depth_mask: True
+    render_depth_mask: True
 
 epochs: 500
-lr: 5.0e-07
+lr: 5.0892961308540394e-07
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -32,7 +37,7 @@ lr_cfg:
   frequency: 1
 
 vm:
-  nr_of_images_per_object: 500
+  nr_of_images_per_object: 2500
   load_images: False
 
 eval:
@@ -43,11 +48,11 @@ training:
   progress_bar_refresh_rate: 1
   refine_iterations: 1
   refine_iterations_range: 0 # iteareatioons elemen refine_iterations +- refine_iterations_range
-  max_epochs: 100
+  max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 10
-  limit_val_batches: 10
+  limit_train_batches: 2000
+  limit_val_batches: 200
 
 visu:
   number_images_log_test: 1

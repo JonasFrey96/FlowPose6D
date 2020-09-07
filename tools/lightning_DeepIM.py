@@ -58,6 +58,45 @@ from helper import get_delta_t_in_euclidean
 from helper import backproject_points_batch, backproject_points, backproject_point
 from deep_im import LossAddS
 from rotations import *
+from deepim_modified import PixelwiseRefiner
+
+
+def get_ref_ite(exp):
+    # Hyper parameters that should  be moved to config
+    refine_iterations = exp.get(
+        'training', {}).get('refine_iterations', 1)
+    rand = exp.get(
+        'training', {}).get('refine_iterations_range', 0)
+    # uniform distributions of refine iterations +- refine_iterations_range
+    # default: refine_iterations = refine_iterations
+    if rand > 0:
+        refine_iterations = random.randrange(
+            refine_iterations - rand)
+    return refine_iterations
+
+
+def get_inital(mode, gt_rot_wxyz, gt_trans, pred_r_current, pred_t_current):
+    if mode == 'DenseFusionInit':
+        pred_rot_wxyz = pred_r_current
+        pred_trans = pred_t_current
+    elif mode == 'TransNoise':
+        pred_rot_wxyz = gt_rot_wxyz
+        pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
+            'training', {}).get('translation_noise_inital', 0.03))
+    elif mode == 'RotTransNoise':
+        pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
+            'training', {}).get('translation_noise_inital', 0.03))
+        raise AssertionError
+    elif mode == 'RotNoise':
+        from scipy.stats import special_ortho_group
+        mat = special_ortho_group.rvs(dim=3, size=bs)
+        pred_trans = gt_trans
+
+        raise AssertionError
+    else:
+        raise AssertionError
+
+    return pred_rot_wxyz, pred_trans
 
 
 def get_bb_from_depth(depth):
@@ -177,9 +216,7 @@ class TrackNet6D(LightningModule):
         self.pin_mem = True
         self.test_size = 0.9
         self.env, self.exp = env, exp
-        restore_deepim_refiner = self.exp.get(
-            'restore_deepim_refiner', '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar')
-        print('Selected GPU: ', torch.cuda.device_count())
+
         for i in range(0, int(torch.cuda.device_count())):
             print(f'GPU {i} Type {torch.cuda.get_device_name(i)}')
         num_obj = 21
@@ -188,29 +225,31 @@ class TrackNet6D(LightningModule):
         num_points_small = exp['d_train']['num_pt_mesh_small']
         num_points_large = exp['d_train']['num_pt_mesh_large']
 
-        self.refiner = DeepIM.from_weights(
-            num_obj, restore_deepim_refiner)
+        self.pixelwise_refiner = PixelwiseRefiner(
+            input_channels=6, num_classes=21, growth_rate=16)
 
         # df stands for DenseFusion
-        self.df_pose_estimator = PoseNet(
-            num_points=exp['d_test']['num_points'], num_obj=num_obj)
         if exp.get('model', {}).get('df_refine', False):
-            self.df_refiner = PoseRefineNet(
+            self.df_pose_estimator = PoseNet(
                 num_points=exp['d_test']['num_points'], num_obj=num_obj)
 
-        if exp.get('model', {}).get('df_load', False):
-            self.df_pose_estimator.load_state_dict(
-                torch.load(exp['model']['df_pose_estimator']))
             if exp.get('model', {}).get('df_refine', False):
-                self.df_refiner.load_state_dict(
-                    torch.load(exp['model']['df_refiner']))
+                self.df_refiner = PoseRefineNet(
+                    num_points=exp['d_test']['num_points'], num_obj=num_obj)
 
-        self.df_criterion = Loss(
-            num_points_mesh=num_points_small,
-            sym_list=exp['d_test']['obj_list_sym'])
-        self.df_criterion_refine = Loss_refine(
-            num_points_mesh=num_points_small,
-            sym_list=exp['d_test']['obj_list_sym'])
+            if exp.get('model', {}).get('df_load', False):
+                self.df_pose_estimator.load_state_dict(
+                    torch.load(exp['model']['df_pose_estimator']))
+                if exp.get('model', {}).get('df_refine', False):
+                    self.df_refiner.load_state_dict(
+                        torch.load(exp['model']['df_refiner']))
+
+            self.df_criterion = Loss(
+                num_points_mesh=num_points_small,
+                sym_list=exp['d_test']['obj_list_sym'])
+            self.df_criterion_refine = Loss_refine(
+                num_points_mesh=num_points_small,
+                sym_list=exp['d_test']['obj_list_sym'])
 
         self.criterion_adds = LossAddS(sym_list=exp['d_train']['obj_list_sym'])
 
@@ -233,22 +272,9 @@ class TrackNet6D(LightningModule):
         logging.getLogger("lightning").addHandler(fh)
 
     def forward(self, batch):
-        torch.cuda.empty_cache()
-        # Hyper parameters that should  be moved to config
-        refine_iterations = self.exp.get(
-            'training', {}).get('refine_iterations', 1)
-        rand = self.exp.get(
-            'training', {}).get('refine_iterations_range', 0)
-        # uniform distributions of refine iterations +- refine_iterations_range
-        # default: refine_iterations = refine_iterations
-        if rand > 0:
-            refine_iterations = random.randrange(
-                refine_iterations - rand, refine_iterations + rand)
 
-        translation_noise = 0.03
         # unpack batch
         points, choose, img, target, model_points, idx = batch[0:6]
-
         depth_img, label_img, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
@@ -273,7 +299,7 @@ class TrackNet6D(LightningModule):
             refine_start = self.exp.get('model', {}).get(
                 'df_refine', False)
 
-            loss, dis, new_points, new_target = self.df_criterion(
+            loss, df_dis, new_points, new_target = self.df_criterion(
                 pred_r, pred_t, pred_c,
                 target, model_points, idx,
                 points, w, refine_start, self.device)
@@ -308,30 +334,15 @@ class TrackNet6D(LightningModule):
                         pred_r_current, pred_r)
                     pred_t_current = pred_t_current + pred_t
 
-        st2 = time.time()
-        # print('Took DF for batch', st2 - st)
-
+        # Select the inital rotation and translation for iterative refinement
         mode = self.exp.get('model', {}).get(
             'inital_pose', {}).get('mode', {'TransNoise'})
-        if mode == 'DenseFusionInit':
-            pred_rot_wxyz = pred_r_current
-            pred_trans = pred_t_current
-        elif mode == 'TransNoise':
-            pred_rot_wxyz = gt_rot_wxyz
-            pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
-                'training', {}).get('translation_noise_inital', 0.03))
-        elif mode == 'RotTransNoise':
-            pred_trans = torch.normal(mean=gt_trans, std=self.exp.get(
-                'training', {}).get('translation_noise_inital', 0.03))
-            raise AssertionError
-        elif mode == 'RotNoise':
-            from scipy.stats import special_ortho_group
-            mat = special_ortho_group.rvs(dim=3, size=bs)
-            pred_trans = gt_trans
-
-            raise AssertionError
-        else:
-            raise AssertionError
+        pred_rot_wxyz, pred_trans = get_inital(
+            mode=mode,
+            gt_rot_wxyz=gt_rot_wxyz,
+            gt_trans=gt_trans,
+            pred_r_current=pred_r_current,
+            pred_t_current=pred_t_current)
 
         # apply pred_rot_wxyz, pred_trans (based on the mode) to get pred_points
         init_rot_mat = quat_to_rot(
@@ -345,6 +356,7 @@ class TrackNet6D(LightningModule):
         bs = img.shape[0]
 
         valid_samples = torch.ones((_bs), device=self.device, dtype=torch.bool)
+        refine_iterations = get_ref_ite(self.exp)
 
         for i in range(0, refine_iterations):
 
@@ -373,7 +385,7 @@ class TrackNet6D(LightningModule):
             bb_lsd = get_bb_from_depth(depth)
             for j, b in enumerate(bb_lsd):
                 tl, br = b.limit_bb()
-                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30:
+                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
                     valid_samples[j] = False
                     b.set_max()
                     # print("BoundingBox violated the min size constrain")
@@ -398,7 +410,7 @@ class TrackNet6D(LightningModule):
             for j, b in enumerate(bb_ls):
 
                 tl, br = b.limit_bb()
-                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30:
+                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
                     valid_samples[j] = False
                     b.set_max()
                     # print("BoundingBox violated the min size constrain")
@@ -419,6 +431,8 @@ class TrackNet6D(LightningModule):
             # stack the two images, might add additional mask as layer or depth info
             data = torch.cat([real_img, render_img], dim=1)
 
+            data = prepare_batch(**locals())
+
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
                 self.Visu.visu_network_input(tag="network_input",
                                              epoch=self.current_epoch,
@@ -435,8 +449,7 @@ class TrackNet6D(LightningModule):
                                                 store=True,
                                                 jupyter=False)
 
-            # folder='/home/jonfrey/Debug', max_images=5)
-            f2, f3, f4, f5, f6, delta_v, delta_rot_wxyz = self.refiner(
+            trans, rotations, segmentation = self.refiner_pixelwise(
                 data, idx)
 
             # Update translation prediction
@@ -477,16 +490,15 @@ class TrackNet6D(LightningModule):
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
                                   target=target, model_points=model_points, idx=idx)
         dis = dis * valid_samples
-        if exp.get('model', {}).get('df_refine', False):
+
+        if exp.get('model', {}).get('df_load', False):
             df_dict[f'df_ref_dis'] = float(
                 torch.mean(df_ref_dis, dim=0).detach())
-
-        df_dict[f'df_ref_dis'] = float(
-            torch.mean(df_ref_dis, dim=0).detach())
-        # df_dict['df_loss_pose_est_avg_batch'] = torch.mean(
-        #     batch_loss, dim=0).detach()
-        df_dict['df_dis'] = float(torch.mean(
-            dis, dim=0).detach())
+            df_dict['df_dis'] = float(torch.mean(
+                df_dis, dim=0).detach())
+            if exp.get('model', {}).get('df_refine', False):
+                df_dict[f'df_ref_dis'] = float(
+                    torch.mean(df_ref_dis, dim=0).detach())
 
         return dis, pred_rot_wxyz.detach(), pred_trans.detach(), df_dict
 
@@ -505,7 +517,7 @@ class TrackNet6D(LightningModule):
         within_add = torch.ge(torch.tensor(
             [thr] * _bs, device=self.device), dis)
 
-        loss = torch.sum(dis) / batch[0][0].shape[0]
+        loss = torch.mean(dis, dim=0)
         # for epoch average logging
         try:
             self._dict_track['train_loss'].append(float(loss))
@@ -773,7 +785,7 @@ class TrackNet6D(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
-            [{'params': self.refiner.parameters()}], lr=self.hparams['lr'])
+            [{'params': self.pixelwise_refiner.parameters()}], lr=self.hparams['lr'])
         scheduler = {
             'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **self.exp['lr_cfg']['on_plateau_cfg']),
             'monitor': 'train_loss',  # Default: val_loss
@@ -1015,10 +1027,11 @@ if __name__ == "__main__":
 
     if exp.get('model_mode', 'fit') == 'fit':
         # lr_finder = trainer.lr_find(
-        #     model, min_lr=0.0000001, max_lr=0.001, num_training=500, early_stop_threshold=100)
-        # Results can be found in
+        #     model, min_lr=0.0000001, max_lr=0.001, num_training=100, early_stop_threshold=100)
+        # # Results can be found in
         # lr_finder.results
-        # lr_finder.suggestion()
+        # foundlr = lr_finder.suggestion()
+        # print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", foundlr)
         trainer.fit(model)
     elif exp.get('model_mode', 'fit') == 'test':
         trainer.test(model)

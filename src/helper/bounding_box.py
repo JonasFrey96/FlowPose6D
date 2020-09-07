@@ -45,6 +45,9 @@ class BoundingBox():
         else:
             return True
 
+    def violation(self):
+        return bool(torch.isinf(self.br[0]) or torch.isinf(self.br[1]) or torch.isinf(self.tl[0]) or torch.isinf(self.tl[1]))
+
     def move(self, u, v):
         self.br[0] += u
         self.tl[0] += u

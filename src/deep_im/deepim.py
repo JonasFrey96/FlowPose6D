@@ -6,20 +6,6 @@ sys.path.append(os.getcwd() + "/src/deep_im")
 from flownet import FlowNetS, flownets_bn, flownets
 import torch.nn as nn
 import torch
-# Implementation questions. How are the bounding boxes created ?
-# Take inital estimate of an other network ? So we get an 6DOF input pose -> crop the image according to this
-# Render the drill image and the pixelwise bounding box of it.
-# make sure that bot images are upsampled to 480x640
-
-# It is shown that optical flow and bounding box regression is not important on YCB
-
-
-# Thhis is just for loss computation (should be easy)
-# translation is prediceted in v_x v_y v_z in image frame.
-# rotation is simple quaternion representing SO3 for the disentangelt representation.
-# compute the new estimated pose after the coordinate transform applied previously. ->
-# take the ADD error of the target model_points and estimated rotated points
-
 from helper import batched_index_select
 
 
