@@ -42,7 +42,7 @@ coloredlogs.install()
 # network dense fusion
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
-
+from lib.loss_focal import FocalLoss
 from lib.network import PoseNet, PoseRefineNet
 
 # from lib.motion_network import MotionNetwork
@@ -202,7 +202,7 @@ class TrackNet6D(LightningModule):
 
         # check exp for errors
         check_exp(exp)
-
+        self._k = 0
         self.vm = None
         self.visu_forward = False
         # logging h-params
@@ -252,7 +252,7 @@ class TrackNet6D(LightningModule):
                 sym_list=exp['d_test']['obj_list_sym'])
 
         self.criterion_adds = LossAddS(sym_list=exp['d_train']['obj_list_sym'])
-
+        self.criterion_focal = FocalLoss()
         self.best_validation = 999
         self.best_validation_patience = 5
         self.early_stopping_value = 0.1
@@ -263,12 +263,11 @@ class TrackNet6D(LightningModule):
         self.number_images_log_test = self.exp.get(
             'visu', {}).get('number_images_log_test', 1)
         self.counter_images_logged = 0
-
         self.init_train_vali_split = False
+
         mp = exp['model_path']
         fh = logging.FileHandler(f'{mp}/Live_Logger_Lightning.log')
         fh.setLevel(logging.DEBUG)
-
         logging.getLogger("lightning").addHandler(fh)
 
     def forward(self, batch):
@@ -278,16 +277,14 @@ class TrackNet6D(LightningModule):
 
         # unpack batch
         points, choose, img, target, model_points, idx = batch[0:6]
-        depth_img, label_img, img_orig, cam = batch[6:10]
+        depth_img, label, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
-
+        log_scalars = {}
         if self.exp.get('model', {}).get('df_load', False):
             # introduce new tensors for full tracking dense fusion
             st = time.time()
             _bs = points.shape[0]
             num_points = exp['d_train']['num_points']
-
-            df_dict = {}
 
             tight_padded_img_batch = tight_image_batch(
                 img, device=self.device)
@@ -307,16 +304,25 @@ class TrackNet6D(LightningModule):
                 target, model_points, idx,
                 points, w, refine_start, self.device)
 
-            _, which_max = torch.max(pred_c, 1)
+            while 1:
+                _, which_max = torch.max(pred_c, 1)
+                failed = False
+                for _j in range(0, _bs):
+                    if not points[_j, which_max[_j], 2] > 0.5 and points[_j, which_max[_j], 2] < 1.6:
+                        failed = True
+                        pred_c[_j, which_max[_j], 0] = 0
+                if failed == False:
+                    break
+                else:
+                    print('which max was invalid point')
+
             which_max = which_max.squeeze(1)
-            pred_r_current = pred_r[0, which_max, :].squeeze(1)
+            enum = torch.range(
+                0, _bs - 1, device=self.device, dtype=torch.long)
+            pred_r_current = pred_r[enum, which_max, :]
+            pred_t_current = pred_t[enum, which_max,
+                                    :] + points[enum, which_max, :]
 
-            important_points = torch.zeros((_bs, 3), device=self.device)
-            for _j in range(0, _bs - 1):
-                important_points[_j] = points[_j, which_max[_j], :]
-
-            pred_t_current = pred_t[0, which_max, :].squeeze(
-                0) + important_points
             if refine_start:
                 for ite in range(0, self.exp.get('model', {}).get('df_refine_iterations', 1)):
                     pred_r, pred_t = self.df_refiner(
@@ -326,13 +332,6 @@ class TrackNet6D(LightningModule):
                         model_points,
                         idx,
                         new_points, self.device)
-                    df_ref_dis2, new_points2, new_target2 = self.df_criterion_refine(
-                        pred_r[0].unsqueeze(0), pred_t[0].unsqueeze(
-                            0), new_target[0].unsqueeze(0),
-                        model_points[0].unsqueeze(0),
-                        idx[0].unsqueeze(0),
-                        new_points[0].unsqueeze(0), self.device, use_orig=True)
-
                     pred_r_current = compose_quat(
                         pred_r_current, pred_r)
                     pred_t_current = pred_t_current + pred_t
@@ -377,7 +376,7 @@ class TrackNet6D(LightningModule):
                 # valid_samples[i] = False
                 pass
 
-            render_img = torch.empty((bs, 3, h, w), device=self.device)
+            render_img = torch.zeros((bs, 3, h, w), device=self.device)
             # preper render data
             st = time.time()
             img_ren, depth, h_render = self.vm.get_closest_image_batch(
@@ -389,7 +388,7 @@ class TrackNet6D(LightningModule):
                 if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
                     valid_samples[j] = False
                     b.set_max()
-                    # print("BoundingBox violated the min size constrain")
+                    print("Depth BoundingBox violated the min size constrain", j)
 
                 center_ren = backproject_points(
                     h_render[j, :3, 3].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
@@ -407,7 +406,8 @@ class TrackNet6D(LightningModule):
             # prepare real data
             real_img = torch.empty((bs, 3, h, w), device=self.device)
             if self.exp['model'].get('sem_seg', False):
-                sem_seg = torch.empty((bs, 1, h, w), device=self.device)
+                gt_label_cropped = torch.zeros(
+                    (bs, h, w), device=self.device, dtype=torch.long)
             # update the target to get new bb
             bb_ls = get_bb_real_target(pred_points, cam, pred_trans)
             for j, b in enumerate(bb_ls):
@@ -416,7 +416,7 @@ class TrackNet6D(LightningModule):
                 if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
                     valid_samples[j] = False
                     b.set_max()
-                    # print("BoundingBox violated the min size constrain")
+                    print("Real BoundingBox violated the min size constrain", j)
 
                 center_real = backproject_points(
                     pred_trans[j].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
@@ -432,45 +432,43 @@ class TrackNet6D(LightningModule):
                 real_img[j] = up(crop_real)
 
                 if self.exp['model'].get('sem_seg', False):
-                    crop_sem_seg = b.crop(
-                        label_img[j].unsqueeze(2)).unsqueeze(0)
-                    crop_sem_seg = torch.transpose(crop_sem_seg, 1, 3)
-                    crop_sem_seg = torch.transpose(crop_sem_seg, 2, 3)
-
-                    sem_seg[j] = torch.round(up(crop_sem_seg.type(
-                        torch.float32)).clamp(0, self.exp['d_train']['objects']))
+                    tmp = torch.transpose(torch.transpose(
+                        b.crop(label[j].unsqueeze(2)), 0, 2), 1, 2)
+                    gt_label_cropped[j] = torch.round(up(tmp.type(
+                        torch.float32).unsqueeze(0))).clamp(0, self.exp['d_train']['objects'] - 1).squeeze(2)
 
             # stack the two images, might add additional mask as layer or depth info
             data = torch.cat([real_img, render_img], dim=1)
 
-            delta_v, rotations, segmentation = self.pixelwise_refiner(
+            # TODO idx is cureently unused !!!!
+            delta_v, rotations, p_label = self.pixelwise_refiner(
                 data, idx)
-            seg_max = segmentation.argmax(dim=1)
 
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
-                label = torch.transpose(sem_seg[0], 1, 2)
-                label = torch.transpose(label, 0, 2)
-                self.visualizer.plot_segmentation(tag='gt_segmentation_cropped',
+                self._k += 1
+                seg_max = p_label.argmax(dim=1)
+                self.visualizer.plot_segmentation(tag=f'{self._k}gt_segmentation_cropped',
                                                   epoch=self.current_epoch,
-                                                  label=label.cpu().numpy(),
-                                                  store=True)
-                self.visualizer.plot_segmentation(tag='gt_segmentation',
-                                                  epoch=self.current_epoch,
-                                                  label=label_img[0].cpu(
+                                                  label=gt_label_cropped[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.plot_segmentation(tag='predicted_segmentation',
+                self.visualizer.plot_segmentation(tag=f'{self._k}gt_segmentation',
                                                   epoch=self.current_epoch,
-                                                  label=torch.round(seg_max[0]).cpu(
+                                                  label=label[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.visu_network_input(tag="network_input",
+                self.visualizer.plot_segmentation(tag=f'{self._k}predicted_segmentation',
+                                                  epoch=self.current_epoch,
+                                                  label=seg_max[0].cpu(
+                                                  ).numpy(),
+                                                  store=True)
+                self.visualizer.visu_network_input(tag=f'{self._k}network_input',
                                                    epoch=self.current_epoch,
                                                    data=data,
                                                    max_images=10,
                                                    store=True,
                                                    jupyter=False)
-                self.visualizer.plot_batch_projection(tag='batch_projection',
+                self.visualizer.plot_batch_projection(tag=f'{self._k}batch_projection',
                                                       epoch=self.current_epoch,
                                                       images=img_orig,
                                                       target=pred_points,
@@ -481,31 +479,33 @@ class TrackNet6D(LightningModule):
 
             # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
             # 1. Update translation prediction
-            shape_orig = delta_v.shape
+            s = delta_v.shape
             delta_v2 = delta_v.contiguous().view(-1, 3).contiguous()
             pred_trans_batch = pred_trans.unsqueeze(2).unsqueeze(2).repeat(
-                1, 1, shape_orig[2], shape_orig[3]).contiguous().view(-1, 3).contiguous()
+                1, 1, s[2], s[3]).contiguous().view(-1, 3).contiguous()
             cam_batch = cam.unsqueeze(2).unsqueeze(2).repeat(
-                1, 1, shape_orig[2], shape_orig[3]).contiguous().view(-1, 4).contiguous()
+                1, 1, s[2], s[3]).contiguous().view(-1, 4).contiguous()
             # image coordinates to euclidean distance
             pred_trans_new = get_delta_t_in_euclidean(
                 delta_v2, t_src=pred_trans_batch,
                 fx=cam_batch[:, 2].unsqueeze(1), fy=cam_batch[:, 3].unsqueeze(1), device=self.device)
             delta_t = pred_trans_new - pred_trans_batch
-            delta_t = delta_t.contiguous().view(shape_orig)
+            delta_t = delta_t.contiguous().view(s)
             # delta_t can be used for bookkeeping to keep track of the translation
             # limit delta_t to be within 10cm
-            val = self.exp.get('training', {}).get('clamp_delta_t_pred', 0.1)
+            val = self.exp.get('training', {}).get(
+                'clamp_delta_t_pred', 0.1)
             delta_t_clamp = torch.clamp(delta_t, -val, val)
             pred_trans_batch = pred_trans_batch.view(
-                shape_orig) + delta_t_clamp
+                s) + delta_t_clamp
             # calculate based on predicted semantic segmentation the pred_trans_mean
             true_res = idx.unsqueeze(2).unsqueeze(3).repeat(
-                1, 1, shape_orig[2], shape_orig[3])
-            object_cor = sem_seg == idx.unsqueeze(2).unsqueeze(3).repeat(
-                1, 1, shape_orig[2], shape_orig[3])
+                1, 1, s[2], s[3])
+            object_cor = gt_label_cropped == idx.unsqueeze(2).repeat(
+                1, s[2], s[3])
             valid_sum = torch.sum(object_cor.view(_bs, -1), dim=1)
-            pred_trans_batch_valid = object_cor.repeat(
+            valid_sum = torch.clamp(valid_sum, 1, 10.0e6)
+            pred_trans_batch_valid = object_cor.unsqueeze(1).repeat(
                 1, 3, 1, 1) * pred_trans_batch
             pred_trans_mean = torch.sum(
                 pred_trans_batch_valid.view(_bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
@@ -516,7 +516,7 @@ class TrackNet6D(LightningModule):
             # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
             identity = torch.zeros(rotations.shape, device=self.device)
             identity[:, 0, :, :] = 1
-            rotations_valid = object_cor.repeat(
+            rotations_valid = object_cor.unsqueeze(1).repeat(
                 1, 4, 1, 1) * (rotations + identity)
             rotations_mean = torch.sum(
                 rotations_valid.view(_bs, 4, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 4)
@@ -524,28 +524,44 @@ class TrackNet6D(LightningModule):
 
             # 3. Update pred_points
             base_new = quat_to_rot(
-                pred_rot_wxyz, 'wxyz', device=self.device).unsqueeze(1)
+                pred_rot_wxyz.clone(), 'wxyz', device=self.device).unsqueeze(1)
             base_new = base_new.view(-1, 3, 3).permute(0, 2, 1)
             pred_points = torch.add(
                 torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
 
+        test_ten = torch.ones(gt_label_cropped.shape,
+                              device=self.device, dtype=torch.long)
+        # try:
+        inp = label.type(torch.int64)
+        inp = torch.clamp(inp, min=0, max=p_label.shape[1] - 1)
+        loss_segmentation = self.criterion_focal(
+            p_label, inp)
+
+        # except:
+        #     focal_loss = self.criterion_focal(
+        #         p_label, te)
+        #     print(gt_label_cropped.shape,
+        #           gt_label_cropped.device, gt_label_cropped.dtype)
+
         # Compute ADD / ADD-S loss
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
                                   target=target, model_points=model_points, idx=idx)
-        dis = dis * valid_samples
 
         if exp.get('model', {}).get('df_load', False):
-            df_dict[f'df_ref_dis'] = float(
+            log_scalars[f'df_ref_dis'] = float(
                 torch.mean(df_ref_dis, dim=0).detach())
-            df_dict['df_dis'] = float(torch.mean(
+            log_scalars['df_dis'] = float(torch.mean(
                 df_dis, dim=0).detach())
             if exp.get('model', {}).get('df_refine', False):
-                df_dict[f'df_ref_dis'] = float(
+                log_scalars[f'df_ref_dis'] = float(
                     torch.mean(df_ref_dis, dim=0).detach())
+        # if self.exp['model'].get('sem_seg', False):
+            # log_scalars[f'focal_loss'] = float(
+                # torch.mean(focal_loss, dim=0).detach())
 
         if torch.isnan(dis).any():
             assert Exception
-        return dis, pred_rot_wxyz.detach(), pred_trans.detach(), df_dict
+        return loss_segmentation, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
 
     def training_step(self, batch, batch_idx):
         self.visu_forward = False
@@ -553,7 +569,7 @@ class TrackNet6D(LightningModule):
         total_dis = 0
 
         st = time.time()
-        dis, _, _, df_dict = self(batch[0])
+        dis, _, _, log_scalars = self(batch[0])
 
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         _bs = batch[0][0].shape[0]
@@ -575,7 +591,7 @@ class TrackNet6D(LightningModule):
 
         # tensorboard logging
         tensorboard_logs = {'train_loss': float(loss)}
-        tensorboard_logs = {**tensorboard_logs, **df_dict}
+        tensorboard_logs = {**tensorboard_logs, **log_scalars}
         #                     'train_loss_without_motion': float(0)}
         # 'dis': total_dis, 'log': tensorboard_logs, 'progress_bar': {'train_dis': total_dis, 'train_loss': total_loss}}
         return {'loss': loss, 'log': tensorboard_logs}
@@ -585,8 +601,9 @@ class TrackNet6D(LightningModule):
         total_dis = 0
 
         st = time.time()
-        dis, pred_r, pred_t, df_dict = self(batch[0])
-
+        dis, pred_r, pred_t, log_scalars = self(batch[0])
+        if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_val', 1):
+            self.visu_forward = True
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         _bs = batch[0][0].shape[0]
         thr = self.exp.get('eval', {}).get('threshold_add', 0.02)
@@ -597,7 +614,6 @@ class TrackNet6D(LightningModule):
         loss = torch.sum(dis) / batch[0][0].shape[0]
 
         if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_val', 1):
-            self.visu_forward = True
             self.counter_images_logged += 1
             points, choose, img, target, model_points, idx = batch[0][0:6]
             depth_img, label_img, img_orig, cam = batch[0][6:10]
@@ -618,7 +634,7 @@ class TrackNet6D(LightningModule):
                 float(torch.mean(within_add.type(torch.float32)))]
 
         tensorboard_logs = {'val_loss': float(loss)}
-        tensorboard_logs = {**tensorboard_logs, **df_dict}
+        tensorboard_logs = {**tensorboard_logs, **log_scalars}
 
         val_loss = loss
         val_dis = loss
@@ -628,7 +644,7 @@ class TrackNet6D(LightningModule):
 
         _bs = batch[0][0].shape[0]
         # forward pass
-        dis, pred_r, pred_t, df_dict = self(batch[0])
+        dis, pred_r, pred_t, log_scalars = self(batch[0])
 
         # visualization
         if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_test', 1):
@@ -787,7 +803,7 @@ class TrackNet6D(LightningModule):
         h = 480
         bs = img.shape[0]
 
-        real_img = torch.empty((bs, 3, h, w), device=self.device)
+        real_img = torch.zeros((bs, 3, h, w), device=self.device)
         # update the target to get new bb
 
         base_inital = quat_to_rot(
@@ -801,8 +817,7 @@ class TrackNet6D(LightningModule):
 
         for j, b in enumerate(bb_ls):
             if not b.check_min_size():
-                print("the bounding box violates the min size constrain")
-                print(b)
+                pass
             c = cam.unsqueeze(0)
             center_real = backproject_points(
                 pred_t.view(1, 3), fx=c[j, 2], fy=c[j, 3], cx=c[j, 0], cy=c[j, 1])
@@ -994,9 +1009,10 @@ if __name__ == "__main__":
 
     if exp['model_path'].split('/')[-2] == 'debug':
         p = '/'.join(exp['model_path'].split('/')[:-2])
-        print('DELETE PATH: ', p)
-        shutil.rmtree(p)
-
+        try:
+            shutil.rmtree(p)
+        except:
+            pass
     timestamp = datetime.datetime.now().replace(microsecond=0).isoformat()
     p = exp['model_path'].split('/')
     p.append(str(timestamp) + '_' + p.pop())
@@ -1025,8 +1041,6 @@ if __name__ == "__main__":
     model = TrackNet6D(**dic)
 
     # default used by the Trainer
-    # TODO create early stopping callback
-    # https://github.com/PyTorchLightning/pytorch-lightning/blob/63bd0582e35ad865c1f07f61975456f65de0f41f/pytorch_lightning/callbacks/base.py#L12
     early_stop_callback = EarlyStopping(
         monitor='avg_val_dis_float',
         patience=exp.get('early_stopping_cfg', {}).get('patience', 100),
@@ -1075,7 +1089,6 @@ if __name__ == "__main__":
         # # Results can be found in
         # lr_finder.results
         # foundlr = lr_finder.suggestion()
-        # print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", foundlr)
         trainer.fit(model)
     elif exp.get('model_mode', 'fit') == 'test':
         trainer.test(model)

@@ -150,7 +150,7 @@ class Visualizer():
                 image_out[h, w, :] = SEG_COLORS[int(label[h, w])][:3]
         if store:
             save_image(
-                image_out, tag=f"segmentation_epoch_{epoch}_{tag}", p_store=self.p_visu)
+                image_out, tag=f"{epoch}_{tag}", p_store=self.p_visu)
         if self.writer is not None:
             self.writer.add_image(
                 tag, image_out, global_step=epoch, dataformats="HWC")
@@ -304,6 +304,7 @@ class Visualizer():
             plot_img_np = get_img_from_fig(fig)
             self.writer.add_image(
                 f'{tag}_project_batch', plot_img_np, global_step=epoch, dataformats='HWC')
+        plt.close()
 
     def visu_network_input(self, tag, epoch, data, max_images=10, store=False, jupyter=False):
         num = min(max_images, data.shape[0])
@@ -340,6 +341,7 @@ class Visualizer():
             plot_img_np = get_img_from_fig(fig)
             self.writer.add_image(
                 f'{tag}_network_input', plot_img_np, global_step=epoch, dataformats='HWC')
+        plt.close()
 
 
 def plot_pcd(x, point_size=0.005, c='g'):
@@ -519,15 +521,6 @@ def load_sample_dict():
 if __name__ == "__main__":
 
     sample = load_sample_dict()
-
-    # # print content of smaple_dict
-    # for n in names:
-    #    try:
-    #        print(n, sample[n].shape)
-    #    except:
-    #        print(n, sample[n])
-    #        pass
-    # visualizer test code
 
     p = "/home/jonfrey/tmp"
     vis = Visualizer(p_visu=p, writer=None)

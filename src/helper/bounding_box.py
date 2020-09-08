@@ -144,15 +144,22 @@ class BoundingBox():
             elif self.br[1] > max_width + p:
                 self.br[1] = max_width + p
 
+            if int(self.br[0]) - int(self.tl[0]) > h:
+                self.br[0] = int((self.br[0] - self.tl[0] + h) / 2)
+                self.tl[0] = int((self.br[0] - self.tl[0] - h) / 2)
+            if int(self.br[1]) - int(self.tl[1]) > w:
+                self.br[1] = int((self.br[1] - self.tl[1] + w) / 2)
+                self.tl[1] = int((self.br[1] - self.tl[1] - w) / 2)
+
             img_pad = torch.zeros((int(h * 3), int(w * 3), img.shape[2]))
 
             off_h = int(h)
             off_w = int(w)
             _tl, _br = self.limit_bb()
             img_pad[off_h + int(_tl[0]): off_h + int(_br[0]), off_w + int(_tl[1]):off_w + int(
-                _br[1]), :] = img[int(_tl[0]):int(_br[0]), int(_tl[1]):int(_br[1]), :]
+                _br[1]), :] = img[int(_tl[0]): int(_br[0]), int(_tl[1]): int(_br[1]), :]
 
-            return img_pad[off_h + int(self.tl[0]):off_h + int(self.br[0]), off_w + int(self.tl[1]):off_w + int(self.br[1]), :]
+            return img_pad[off_h + int(self.tl[0]): off_h + int(self.br[0]), off_w + int(self.tl[1]): off_w + int(self.br[1]), :]
 
     def add_noise(self, std_h, std_w):
         # std_h is the variance that is added to the top corrner position and, bottom_corner position

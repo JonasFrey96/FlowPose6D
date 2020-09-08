@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/joint_refinement/debug/_" #debug
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/debug/_" #debug
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
@@ -15,7 +15,7 @@ model:
   df_refine: True
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
-  df_refine_iterations: 2
+  df_refine_iterations: 1
   df_dump_pred_pickle: True
   inital_pose:
     mode: "DenseFusionInit" # 'TransNoise' 'RotTransNoise'  'RotNoise'
@@ -28,7 +28,7 @@ model:
   sem_seg: True
 
 epochs: 500
-lr: 5.0892961308540394e-07
+lr: 1.0e-5
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -52,13 +52,13 @@ training:
   max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 2000
-  limit_val_batches: 200
+  limit_train_batches: 200
+  limit_val_batches: 10
 
 visu:
-  number_images_log_test: 1
+  number_images_log_test: 2
   number_images_log_val: 2
-  network_input_batch: False
+  network_input_batch: True
 
 early_stopping_cfg:
   patience: 100
@@ -70,7 +70,7 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 8
+  batch_size: 2
   workers: 4
 
 d_test:

@@ -161,7 +161,7 @@ class PixelwiseRefiner(nn.Module):
         self.segmentation_head = pointwise_conv(
             out_features, [128, 64], num_classes)
 
-    def forward(self, data, label=None):
+    def forward(self, data, idx, label=None):
         N, C, H, W = data.shape
         features = self.features(data)  # 240 x 320 x 64
         x = self.conv1(features)
