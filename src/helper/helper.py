@@ -35,8 +35,6 @@ def batched_index_select(t, inds, dim=1):
     Returns:
         [type]: [description]
     """
-    if inds.shape[0] == 2 and inds[0, 0] != inds[1, 0]:
-        raise Exception  # check if it works actually
     if len(t.shape) == 3:
         dummy = inds.unsqueeze(2).expand(
             inds.size(0), inds.size(1), t.size(2))

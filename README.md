@@ -44,9 +44,14 @@ Got to:
 `yaml/env/env_ws.yml`
 and edit the following pathts:
 
+#### Natrix Uusefull Commands:
 
+```
+nohup python tools/lightning_DeepIM.py > nohup/learn_segmentation_faster_lr.log &
+```
 
 #### Leonhard Usefull Commands:
+
 ```
 conda activate track2
 
@@ -77,8 +82,9 @@ bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=250
 
 
 ```
+
 Starting Tensorboard:
-``` ./scripts/leonhard/start_tensorboard.sh deep_im ```
+`./scripts/leonhard/start_tensorboard.sh deep_im`
 
 ### Lightning Module:
 
@@ -143,7 +149,7 @@ In the lightning module the validation and training data are seperated via **_sk
 #### Logging:
 
 Each run is stored in a seperated folder.
-The folder is configured in: `exp_ws` _model_path\_
+The folder is configured in: `exp_ws` \_model_path\_
 
 self.hparams are automatically stored as a yaml. In our case we add the env and exp to reproduce exactly our experiment.
 
@@ -166,10 +172,10 @@ Check PytorchLightning Documentation,
 
 Add modules to the `src` folder or files to `lib`.
 
-
 ## Keypoint labeling
 
 The subdirectory `labeling/` contains a small tool to label `.obj` meshes. The tool can be built using:
+
 ```
 mkdir -p labeling/build/
 cd labeling/build/

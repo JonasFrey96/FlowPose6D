@@ -120,7 +120,6 @@ class Upsample(nn.Sequential):
 class PixelwiseRefiner(nn.Module):
     def __init__(self, input_channels=8, num_classes=22, growth_rate=16):
         super().__init__()
-
         self.features = nn.Sequential(
             nn.Conv2d(input_channels, 64, kernel_size=7,
                       padding=3, stride=2, bias=True),

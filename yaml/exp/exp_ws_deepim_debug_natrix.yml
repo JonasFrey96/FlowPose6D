@@ -1,10 +1,12 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/debug/_" #debug
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/learn_segmentation/_" #debug
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
 refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
 restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
+checkpoint_restore: True
+checkpoint_load: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/learn_segmentation/2020-09-09T06:30:19__/epoch=21-avg_val_dis_float=0.1178.ckpt"
 mail: false
 model_mode: fit
 
@@ -28,7 +30,7 @@ model:
   sem_seg: True
 
 epochs: 500
-lr: 1.0e-5
+lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -52,8 +54,8 @@ training:
   max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 200
-  limit_val_batches: 10
+  limit_train_batches: 1500
+  limit_val_batches: 150
 
 visu:
   number_images_log_test: 2

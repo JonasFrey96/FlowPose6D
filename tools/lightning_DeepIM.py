@@ -202,7 +202,6 @@ class TrackNet6D(LightningModule):
 
         # check exp for errors
         check_exp(exp)
-        self._k = 0
         self.vm = None
         self.visu_forward = False
         # logging h-params
@@ -226,7 +225,7 @@ class TrackNet6D(LightningModule):
         num_points_large = exp['d_train']['num_pt_mesh_large']
 
         self.pixelwise_refiner = PixelwiseRefiner(
-            input_channels=6, num_classes=21, growth_rate=16)
+            input_channels=6, num_classes=self.exp['d_test']['objects'] + 1, growth_rate=16)
 
         # df stands for DenseFusion
         if exp.get('model', {}).get('df_refine', False):
@@ -308,7 +307,7 @@ class TrackNet6D(LightningModule):
                 _, which_max = torch.max(pred_c, 1)
                 failed = False
                 for _j in range(0, _bs):
-                    if not points[_j, which_max[_j], 2] > 0.5 and points[_j, which_max[_j], 2] < 1.6:
+                    if not points[_j, which_max[_j], 2] > 0.3 and points[_j, which_max[_j], 2] < 1.6:
                         failed = True
                         pred_c[_j, which_max[_j], 0] = 0
                 if failed == False:
@@ -435,7 +434,7 @@ class TrackNet6D(LightningModule):
                     tmp = torch.transpose(torch.transpose(
                         b.crop(label[j].unsqueeze(2)), 0, 2), 1, 2)
                     gt_label_cropped[j] = torch.round(up(tmp.type(
-                        torch.float32).unsqueeze(0))).clamp(0, self.exp['d_train']['objects'] - 1).squeeze(2)
+                        torch.float32).unsqueeze(0))).clamp(0, self.exp['d_train']['objects']).squeeze(2)
 
             # stack the two images, might add additional mask as layer or depth info
             data = torch.cat([real_img, render_img], dim=1)
@@ -445,30 +444,29 @@ class TrackNet6D(LightningModule):
                 data, idx)
 
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
-                self._k += 1
                 seg_max = p_label.argmax(dim=1)
-                self.visualizer.plot_segmentation(tag=f'{self._k}gt_segmentation_cropped',
+                self.visualizer.plot_segmentation(tag=f'{self.counter_images_logged}gt_segmentation_cropped',
                                                   epoch=self.current_epoch,
                                                   label=gt_label_cropped[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.plot_segmentation(tag=f'{self._k}gt_segmentation',
+                self.visualizer.plot_segmentation(tag=f'{self.counter_images_logged}gt_segmentation',
                                                   epoch=self.current_epoch,
                                                   label=label[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.plot_segmentation(tag=f'{self._k}predicted_segmentation',
+                self.visualizer.plot_segmentation(tag=f'{self.counter_images_logged}predicted_segmentation',
                                                   epoch=self.current_epoch,
                                                   label=seg_max[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.visu_network_input(tag=f'{self._k}network_input',
+                self.visualizer.visu_network_input(tag=f'{self.counter_images_logged}network_input',
                                                    epoch=self.current_epoch,
                                                    data=data,
                                                    max_images=10,
                                                    store=True,
                                                    jupyter=False)
-                self.visualizer.plot_batch_projection(tag=f'{self._k}batch_projection',
+                self.visualizer.plot_batch_projection(tag=f'{self.counter_images_logged}batch_projection',
                                                       epoch=self.current_epoch,
                                                       images=img_orig,
                                                       target=pred_points,
@@ -533,15 +531,9 @@ class TrackNet6D(LightningModule):
                               device=self.device, dtype=torch.long)
         # try:
         inp = label.type(torch.int64)
-        inp = torch.clamp(inp, min=0, max=p_label.shape[1] - 1)
+        inp = torch.clamp(inp, min=0, max=p_label.shape[1])
         loss_segmentation = self.criterion_focal(
             p_label, inp)
-
-        # except:
-        #     focal_loss = self.criterion_focal(
-        #         p_label, te)
-        #     print(gt_label_cropped.shape,
-        #           gt_label_cropped.device, gt_label_cropped.dtype)
 
         # Compute ADD / ADD-S loss
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
@@ -1061,7 +1053,7 @@ if __name__ == "__main__":
     )
     if exp.get('checkpoint_restore', False):
         checkpoint = torch.load(
-            exp['checkpoint_path'], map_location=lambda storage, loc: storage)
+            exp['checkpoint_load'], map_location=lambda storage, loc: storage)
         model.load_state_dict(checkpoint['state_dict'])
 
     with torch.autograd.set_detect_anomaly(True):
