@@ -15,14 +15,21 @@ model:
   df_refine: True
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
-  df_refine_iterations: 2
+  df_refine_iterations: 1
   df_dump_pred_pickle: True
   inital_pose:
     mode: "DenseFusionInit" # 'TransNoise' 'RotTransNoise'  'RotNoise'
     translation_noise_inital: 0.03
+    rot_noise_deg_inital: 5
+  mask:
+    real_mask: True
+    render_mask: True
+    real_depth_mask: True
+    render_depth_mask: True
+  sem_seg: True
 
 epochs: 500
-lr: 1.0e-07
+lr: 1.0e-5
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -32,8 +39,8 @@ lr_cfg:
   frequency: 1
 
 vm:
-  nr_of_images_per_object: 500
-  load_images: True
+  nr_of_images_per_object: 2500
+  load_images: False
 
 eval:
   threshold_add: 0.02
@@ -41,25 +48,22 @@ eval:
 training:
   accumulate_grad_batches: 1
   progress_bar_refresh_rate: 1
-  translation_noise_inital: 0.03
   refine_iterations: 1
   refine_iterations_range: 0 # iteareatioons elemen refine_iterations +- refine_iterations_range
-  max_epochs: 100
+  max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 5000
-  limit_val_batches: 500
+  limit_train_batches: 50
+  limit_val_batches: 5
 
 visu:
-  number_images_log_test: 1
-  number_images_log_val: 1
-  network_input_batch: False
+  number_images_log_test: 2
+  number_images_log_val: 2
+  network_input_batch: True
+  log_to_file: True
 
 early_stopping_cfg:
   patience: 100
-
-w_normal: 0.015
-w_normal_rate: 0.3
 
 decay_margin_start: 0.016
 samples_early_break_epoch: 5000000
@@ -68,18 +72,24 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 16
-  workers: 20
+  batch_size: 2
+  num_workers: 10
+  shuffle: True
+  pin_memory: True
 
 d_test:
   name: "ycb"
   objects: 21
   num_points: 1000
-  num_pt_mesh_small: 2000
+  num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general
-    - 1
-    - 2
+  obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
+    - 12
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
   obj_list_sym:
     - 12
     - 15
@@ -91,7 +101,7 @@ d_test:
     seq_length: 1
     fixed_length: true
     sub_sample: 1
-    mode: "test" #dense_fusion_test
+    mode: "dense_fusion_test" #dense_fusion_test
     add_syn_to_train: false
   noise_cfg:
     status: false
@@ -111,11 +121,15 @@ d_train:
   name: "ycb"
   objects: 21
   num_points: 1000
-  num_pt_mesh_small: 2000
+  num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
   obj_list_fil: # if not null add list with specific elements
-    - 1
-    - 2
+    - 12
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
   obj_list_sym:
     - 12
     - 15
@@ -128,7 +142,7 @@ d_train:
     no_list_for_sequence_len_one: True
     fixed_length: true
     sub_sample: 1
-    mode: "train"
+    mode: "dense_fusion_train"
     add_syn_to_train: true
   noise_cfg:
     status: false

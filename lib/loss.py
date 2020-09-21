@@ -78,18 +78,15 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
     loss = torch.mean((dis * pred_c - w * torch.log(pred_c)), dim=0)
 
     pred_c = pred_c.view(bs, num_p)
-    how_max, which_max = torch.max(pred_c, 1)
+    _, which_max = torch.max(pred_c, 1)
+
     dis = dis.view(bs, num_p)
 
-    ori_t_sel = torch.zeros((bs, 3), device=device)
-    points_sel = torch.zeros((bs, 3), device=device)
-    ori_base_sel = torch.zeros((bs, 3, 3), device=device)
+    enum = torch.range(0, bs - 1, device=device, dtype=torch.long)
 
-    for _j in range(0, bs - 1):
-        ori_t_sel[_j] = ori_t.view(bs, num_p, 3)[_j, which_max[_j], :]
-        points_sel[_j] = points.view(bs, num_p, 3)[_j, which_max[_j], :]
-        ori_base_sel[_j] = ori_base.view(bs, num_p, 3, 3)[
-            _j, which_max[_j], :, :]
+    ori_t_sel = ori_t.view(bs, num_p, 3)[enum, which_max, :]
+    points_sel = points.view(bs, num_p, 3)[enum, which_max, :]
+    ori_base_sel = ori_base.view(bs, num_p, 3, 3)[enum, which_max, :, :]
 
     t = ori_t_sel + points_sel
     ori_base = ori_base_sel
@@ -101,13 +98,15 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
 
     tmp1 = ori_target.view(bs, num_p, num_point_mesh, 3)
     new_target = tmp1[:, 0, :, :].view(bs, num_point_mesh, 3).contiguous()
+    # ori_t 16 2000 3
 
     ori_t = t.unsqueeze(1).repeat(1, num_point_mesh, 1).contiguous().view(
         bs, num_point_mesh, 3)
 
     new_target = torch.bmm((new_target - ori_t), ori_base).contiguous()
 
-    return loss, dis[:, which_max[0]], new_points.detach(), new_target.detach()
+    # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
+    return loss, dis[enum, which_max], new_points.detach(), new_target.detach()
 
 
 class Loss(_Loss):

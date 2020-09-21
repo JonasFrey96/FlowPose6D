@@ -33,6 +33,9 @@ from visu import plot_pcd, plot_two_pcd
 from helper import generate_unique_idx
 from loaders_v2 import Backend, ConfigLoader
 from helper import flatten_dict, get_bbox_480_640
+import glob
+import torchvision
+from pathlib import Path
 
 
 class YCB(Backend):
@@ -53,6 +56,34 @@ class YCB(Backend):
         self._minimum_num_pt = 50
         self._xmap = np.array([[j for i in range(640)] for j in range(480)])
         self._ymap = np.array([[i for i in range(640)] for j in range(480)])
+        if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
+            n = self._cfg_d['noise_cfg']
+            self.input_jitter = torchvision.transforms.ColorJitter(
+                n['jitter_brightness'],
+                n['jitter_contrast'],
+                n['jitter_saturation'],
+                n['jitter_hue'])
+        self.input_grey = torchvision.transforms.RandomGrayscale(
+            p=self._cfg_d['noise_cfg'].get('p_grey', 0))
+        self._load_background()
+
+    def _load_background(self):
+        p = self._cfg_env['p_background']
+        self.background = [str(p) for p in Path(p).rglob('*.jpg')]
+
+    def _get_background_image(self):
+        seed = random.choice(self.background)
+        img = Image.open(seed).convert("RGB")
+        w, h = img.size
+        w_g, h_g = 640, 480
+        if w / h < w_g / h_g:
+            h = int(w * h_g / w_g)
+        else:
+            w = int(h * w_g / h_g)
+        crop = transforms.CenterCrop((h, w))
+        img = crop(img)
+        img = img.resize((w_g, h_g))
+        return np.array(self._trancolor(img))
 
     def getElement(self, desig, obj_idx):
         """
@@ -74,17 +105,21 @@ class YCB(Backend):
             logging.error(
                 'cant find files for {0}/{1}'.format(self._p_ycb, desig))
             return False
-
         cam = self.get_camera(desig)
 
-        if self._cfg_d['output_cfg']['visu']['return_img']:
-            img_copy = np.array(img.convert("RGB"))
+        if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
+            img = self.input_jitter(img)
+
+        if self._cfg_d['noise_cfg'].get('p_grey', 0) > 0:
+            img = self.input_grey(img)
 
         mask_back = ma.getmaskarray(ma.masked_equal(label, 0))
+        mask_ind = label == 0
+
         add_front = False
 
         # TODO add here correct way to load noise
-        if self._cfg_d['noise_cfg']['status']:
+        if self._cfg_d['noise_cfg']['status'] and False:
             for k in range(5):
 
                 seed = random.choice(self._syn)
@@ -148,24 +183,23 @@ class YCB(Backend):
         # return the pixel coordinate for the bottom left and
         # top right corner
         # cropping the image
-        img = np.transpose(np.array(img)[:, :, :3], (2, 0, 1))[
-            :, rmin:rmax, cmin:cmax]
 
         if desig[:8] == 'data_syn':
-            # this might lead to problems later because we also use test data as background. But for now at first it is fine
-            seed = random.choice(self._real)
-            back = np.array(self._trancolor(Image.open(
-                '{0}/{1}-color.png'.format(self._p_ycb, seed)).convert("RGB")))
-            back = np.transpose(back, (2, 0, 1))[:, rmin:rmax, cmin:cmax]
-            img_masked = back * mask_back[rmin:rmax, cmin:cmax] + img
+            back = self._get_background_image()
+            img = np.array(img)[:, :, :3]
+            img[mask_ind] = back[:, :, :3][mask_ind]
+            img_masked = np.transpose(
+                img[rmin:rmax, cmin:cmax, :], (2, 0, 1))  # 3, h_, w_
 
-            try:
-                background_img = Image.open(
-                    '{0}/{1}-color.png'.format(self._p_ycb, desig))
-            except:
-                logging.info('cant find background')
+            if self._cfg_d['output_cfg']['visu']['return_img']:
+                img_copy = img
+
         else:
-            img_masked = img
+            img_masked = np.transpose(np.array(img)[:, :, :3], (2, 0, 1))[
+                :, rmin:rmax, cmin:cmax]
+
+            if self._cfg_d['output_cfg']['visu']['return_img']:
+                img_copy = np.array(img.convert("RGB"))
 
         if self._cfg_d['noise_cfg']['status'] and add_front:
             img_masked = img_masked * mask_front[rmin:rmax, cmin:cmax] + \
@@ -217,11 +251,18 @@ class YCB(Backend):
         # adds noise to target to regress on
         target = np.dot(model_points, target_r.T)
         target = np.add(target, target_t + add_t)
+
+        if self._cfg_d['noise_cfg'].get('normalize_output_image_crop', True):
+            torch_img = self._norm(torch.from_numpy(
+                img_masked.astype(np.float32)))
+        else:
+            torch_img = torch.from_numpy(
+                img_masked.astype(np.float32))
+
         if self._cfg_d['output_cfg'].get('return_same_size_tensors', False):
             # maybe not zero the image completly
             # find complete workaround to deal with choose the target and the model point cloud do we need the corrospondence between points
-            torch_img = self._norm(torch.from_numpy(
-                img_masked.astype(np.float32)))
+
             padded_img = torch.zeros((3, 480, 640), dtype=torch.float32)
             sha = torch_img.shape
             padded_img[:sha[0], :sha[1], :sha[2]
@@ -236,7 +277,7 @@ class YCB(Backend):
         else:
             tup = (torch.from_numpy(cloud.astype(np.float32)),
                    torch.LongTensor(choose.astype(np.int32)),
-                   self._norm(torch.from_numpy(img_masked.astype(np.float32))),
+                   torch_img,
                    torch.from_numpy(target.astype(np.float32)),
                    torch.from_numpy(model_points.astype(np.float32)),
                    torch.LongTensor([int(obj_idx) - 1]))
@@ -289,14 +330,12 @@ class YCB(Backend):
 
     def convert_desig_to_batch_list(self, desig, lookup_desig_to_obj):
         """ only works without sequence setting """
-
         if self._cfg_d['batch_list_cfg']['seq_length'] == 1:
             seq_list = []
             for d in desig:
                 for o in lookup_desig_to_obj[d]:
 
                     obj_full_path = d[:-7]
-
                     obj_name = o
                     index_list = []
                     index_list.append(d.split('/')[-1])
@@ -387,7 +426,9 @@ class YCB(Backend):
         """create batch list based on cfg"""
         lookup_arr = np.load(
             self._cfg_env['p_ycb_lookup_desig_to_obj'], allow_pickle=True)
+        arr = np.array(['data_syn/000000', [20, 6, 2, 16, 8, 4]])[None, :]
 
+        lookup_arr = np.concatenate([arr, lookup_arr])
         lookup_dict = {}
         for i in range(lookup_arr.shape[0]):
             lookup_dict[lookup_arr[i, 0]] = lookup_arr[i, 1]
@@ -431,7 +472,6 @@ class YCB(Backend):
             batch_ls = self.convert_desig_to_batch_list(desig_ls, lookup_dict)
 
             pickle.dump(batch_ls, open(name, "wb"))
-
         return batch_ls
 
     def get_camera(self, desig):

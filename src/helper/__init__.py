@@ -5,7 +5,9 @@ from .postprocess import kf_sequence
 from .bounding_box import BoundingBox
 from .get_delta_t_in_image_space import get_delta_t_in_image_space, get_delta_t_in_euclidean
 from .camera import *
+from .auc import *
 __all__ = (
+    'compute_auc',
     'batched_index_select',
     'flatten_dict',
     'rotation_angle',

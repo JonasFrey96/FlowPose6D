@@ -5,7 +5,7 @@ refiner_restore: false
 refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
 restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
-checkpoint_restore: True
+checkpoint_restore: False
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/learn_segmentation/2020-09-09T06:30:19__/epoch=21-avg_val_dis_float=0.1178.ckpt"
 mail: false
 model_mode: fit
@@ -22,6 +22,7 @@ model:
   inital_pose:
     mode: "DenseFusionInit" # 'TransNoise' 'RotTransNoise'  'RotNoise'
     translation_noise_inital: 0.03
+    rot_noise_deg_inital: 5
   mask:
     real_mask: True
     render_mask: True
@@ -30,7 +31,7 @@ model:
   sem_seg: True
 
 epochs: 500
-lr: 1.0e-3
+lr: 1.0e-5
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -54,13 +55,14 @@ training:
   max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 1500
-  limit_val_batches: 150
+  limit_train_batches: 50
+  limit_val_batches: 5
 
 visu:
   number_images_log_test: 2
   number_images_log_val: 2
   network_input_batch: True
+  log_to_file: True
 
 early_stopping_cfg:
   patience: 100
@@ -73,13 +75,15 @@ time_early_break_validation: 10
 
 loader:
   batch_size: 2
-  workers: 4
+  num_workers: 10
+  shuffle: True
+  pin_memory: True
 
 d_test:
   name: "ycb"
   objects: 21
   num_points: 1000
-  num_pt_mesh_small: 2000
+  num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
   obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
     - 12
@@ -119,7 +123,7 @@ d_train:
   name: "ycb"
   objects: 21
   num_points: 1000
-  num_pt_mesh_small: 2000
+  num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
   obj_list_fil: # if not null add list with specific elements
     - 12

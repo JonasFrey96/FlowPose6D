@@ -15,7 +15,7 @@ p_ycb: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/ycb/YCB_Video_Datase
 p_ycb_lookup_desig_to_obj: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/config/desig_obj_list.npy"
 p_ycb_config: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/config"
 p_config: "/cluster/work/riner/users/PLR-2020/jonfrey/datasets/config/"
-
+p_background: "/media/scratch1/jonfrey/datasets/Indoor_Scene/Images"
 # just needed on leonhard
 leonhard:
   copy: true
