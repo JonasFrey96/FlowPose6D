@@ -18,6 +18,10 @@ model:
   df_w_normal_rate: 0.3
   df_refine_iterations: 2
 
+loss:
+  weight_semantic_segmentation: 0.5
+  weight_pose: 0.5
+
 epochs: 500
 lr: 1.0e-06
 lr_cfg:
@@ -88,7 +92,7 @@ d_test:
     seq_length: 1
     fixed_length: true
     sub_sample: 1
-    mode: "test" #dense_fusion_test
+    mode: "dense_fusion_test" #dense_fusion_test
     add_syn_to_train: false
   noise_cfg:
     status: false
@@ -125,7 +129,7 @@ d_train:
     no_list_for_sequence_len_one: True
     fixed_length: true
     sub_sample: 1
-    mode: "train"
+    mode: "dense_fusion_train"
     add_syn_to_train: true
   noise_cfg:
     status: false

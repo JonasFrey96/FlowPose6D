@@ -29,7 +29,7 @@ sys.path.append(os.path.join(os.getcwd() + '/lib'))
 # src modules
 from helper import pad
 from loaders_v2 import ConfigLoader
-
+from eval import *
 import torch
 from pytorch_lightning.core.lightning import LightningModule
 from pytorch_lightning import Trainer, seed_everything
@@ -486,28 +486,28 @@ class TrackNet6D(LightningModule):
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
                 self._k += 1
                 seg_max = p_label.argmax(dim=1)
-                self.visualizer.plot_segmentation(tag=f'{self._k}gt_segmentation_cropped',
+                self.visualizer.plot_segmentation(tag=f'gt_segmentation_cropped',
                                                   epoch=self.current_epoch,
                                                   label=gt_label_cropped[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.plot_segmentation(tag=f'{self._k}gt_segmentation',
+                self.visualizer.plot_segmentation(tag=f'gt_segmentation',
                                                   epoch=self.current_epoch,
                                                   label=label[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.plot_segmentation(tag=f'{self._k}predicted_segmentation',
+                self.visualizer.plot_segmentation(tag=f'predicted_segmentation',
                                                   epoch=self.current_epoch,
                                                   label=seg_max[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.visu_network_input(tag=f'{self._k}network_input',
+                self.visualizer.visu_network_input(tag=f'network_input',
                                                    epoch=self.current_epoch,
                                                    data=data,
                                                    max_images=10,
                                                    store=True,
                                                    jupyter=False)
-                self.visualizer.plot_batch_projection(tag=f'{self._k}batch_projection',
+                self.visualizer.plot_batch_projection(tag=f'batch_projection',
                                                       epoch=self.current_epoch,
                                                       images=img_orig,
                                                       target=pred_points,
@@ -609,7 +609,12 @@ class TrackNet6D(LightningModule):
 
         if torch.isnan(dis).any():
             assert Exception
-        return loss_segmentation, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
+
+        w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
+        w_p = self.exp.get('loss', {}).get('weight_pose', 0.5)
+        loss = w_s * loss_segmentation + w_p * dis
+
+        return loss, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
 
     def training_step(self, batch, batch_idx):
         st = time.time()
@@ -694,6 +699,8 @@ class TrackNet6D(LightningModule):
         for i in range(0, bs):
             # object loss for each object
             obj = int(unique_desig[1][i])
+            obj = list(
+                self.trainer.val_dataloaders[0].dataset._backend._name_to_idx.keys())[obj - 1]
             if f'val_{obj}_adds_dis  [+inf - 0]' in self._dict_track.keys():
                 self._dict_track[f'val_{obj}_adds_dis  [+inf - 0]'].append(
                     float(dis[i]))
@@ -810,6 +817,15 @@ class TrackNet6D(LightningModule):
 
         self.counter_images_logged = 0  # reset image log counter
 
+        df1 = dict_to_df(avg_dict)
+        df2 = dict_to_df(get_df_dict(pre='val'))
+        img = compare_df(df1, df2, key='auc [0 - 100]')
+        tag = 'val_table_res_vs_df'
+        img.save(self.exp['model_path'] +
+                 f'/visu/{self.current_epoch}_{tag}.png')
+        self.logger.experiment.add_image(tag, np.array(img).astype(
+            np.uint8), global_step=self.current_epoch, dataformats='HWC')
+
         avg_val_dis_float = float(avg_dict['avg_val_loss  [+inf - 0]'])
         return {'avg_val_dis_float': avg_val_dis_float,
                 'avg_val_dis': avg_dict['avg_val_loss  [+inf - 0]'],
@@ -851,7 +867,15 @@ class TrackNet6D(LightningModule):
         self.counter_images_logged = 0  # reset image log counter
         avg_test_dis_float = float(avg_dict['avg_test_loss  [+inf - 0]'])
 
-        print('RESULTS 2', avg_dict)
+        df1 = dict_to_df(avg_dict)
+        df2 = dict_to_df(get_df_dict(pre='test'))
+        img = compare_df(df1, df2, key='auc [0 - 100]')
+        tag = 'test_table_res_vs_df'
+        img.save(self.exp['model_path'] +
+                 f'/visu/{self.current_epoch}_{tag}.png')
+        self.logger.experiment.add_image(tag, np.array(img).astype(
+            np.uint8), global_step=self.current_epoch, dataformats='HWC')
+
         return {'avg_test_dis_float': avg_test_dis_float,
                 'avg_test_dis': avg_dict['avg_test_loss  [+inf - 0]'],
                 'log': avg_dict}
@@ -1224,6 +1248,7 @@ if __name__ == "__main__":
             'limit_train_batches', 5000),
             limit_val_batches=exp['training'].get(
             'limit_val_batches', 500),
+            limit_test_batches=100,
             val_check_interval=1.0,
             progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
             max_epochs=exp['training']['max_epochs'],
