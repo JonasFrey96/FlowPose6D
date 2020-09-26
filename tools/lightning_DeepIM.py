@@ -371,6 +371,10 @@ class TrackNet6D(LightningModule):
         w_p = self.exp.get('loss', {}).get('weight_pose', 0.5)
         loss = w_s * focal_loss + w_p * dis
 
+        log_scalars[f'loss_segmentation'] = float(
+            torch.mean(focal_loss, dim=0).detach())
+        log_scalars[f'loss_pose_add'] = float(torch.mean(dis, dim=0).detach())
+
         if torch.sum(valid_samples) == 0:
             loss = torch.zeros(
                 dis.shape, requires_grad=True, dtype=torch.float32, device=self.device)
@@ -579,11 +583,12 @@ class TrackNet6D(LightningModule):
         delta_t = delta_t.contiguous().view(s)
         # delta_t can be used for bookkeeping to keep track of the translation
         # limit delta_t to be within 10cm
-        val = self.exp.get('training', {}).get(
-            'clamp_delta_t_pred', 0.1)
-        delta_t_clamp = torch.clamp(delta_t, -val, val)
+        # val = self.exp.get('training', {}).get(
+        #     'clamp_delta_t_pred', 0.1)
+        # delta_t_clamp = torch.clamp(delta_t, -val, val)
         pred_trans_batch = pred_trans_batch.view(
-            s) + delta_t_clamp
+            s) + delta_t
+
         # calculate based on predicted semantic segmentation the pred_trans_mean
         true_res = idx.unsqueeze(2).unsqueeze(3).repeat(
             1, 1, s[2], s[3])
@@ -595,6 +600,7 @@ class TrackNet6D(LightningModule):
             1, 3, 1, 1) * pred_trans_batch
         pred_trans_mean = torch.sum(
             pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
+        pred_trans = pred_trans_mean
 
         # 2. Update rotation
         # Quaternion averageing base on http://www.acsu.buffalo.edu/~johnc/ave_quat07.pdf
@@ -602,14 +608,58 @@ class TrackNet6D(LightningModule):
         # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
         identity = torch.zeros(rotations.shape, device=self.device)
         identity[:, 0, :, :] = 1
-
-        enum = torch.range(
-            0, bs - 1, device=self.device, dtype=torch.long)
-
         rotations_valid = (rotations + identity) * \
             object_cor[:, None, :, :].repeat(1, 4, 1, 1).type(torch.float32)
         rotations_mean = torch.sum(rotations_valid, dim=(
             2, 3)) / torch.sum(object_cor, dim=(1, 2))[:, None].repeat(1, 4)
+        pred_rot_wxyz = compose_quat(pred_rot_wxyz, rotations_mean)
+
+        # 3. Update pred_points
+        base_new = quat_to_rot(
+            pred_rot_wxyz.clone(), 'wxyz', device=self.device).unsqueeze(1)
+        base_new = base_new.view(-1, 3, 3).permute(0, 2, 1)
+        pred_points = torch.add(
+            torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
+
+        return pred_trans, pred_rot_wxyz, pred_points
+
+    def forward_pose_simple(self, delta_v, rotations, pred_trans, pred_rot_wxyz, model_points, cam, idx, gt_label_cropped):
+        bs = model_points.shape[0]
+        idx_v = torch.abs(delta_v[:, :]) > 0.25
+        while idx_v.any():
+            idx_v = torch.abs(delta_v[:, :]) > 0.25
+            delta_v[:, :][idx_v] = delta_v[:, :][idx_v] * 0.5
+
+        # idx_z = torch.abs(delta_v[:, 2]) > 0.2
+        # while idx_z.any():
+        #     idx_z = torch.abs(delta_v[:, 2]) > 0.2
+        #     delta_v[:, 2][idx_z] = delta_v[:, 2][idx_z] * 0.5
+
+        # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
+        # 1. Update translation prediction
+        s = delta_v.shape
+        object_cor = gt_label_cropped == idx.unsqueeze(2).repeat(
+            1, s[2], s[3])
+
+        valid_sum = torch.sum(object_cor.view(bs, -1), dim=1)
+        valid_sum = torch.clamp(valid_sum, 1, 10.0e6)
+        pred_trans_batch_valid = object_cor.unsqueeze(1).repeat(
+            1, 3, 1, 1) * delta_v
+        pred_trans_mean = torch.sum(
+            pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
+        pred_trans = pred_trans + pred_trans_mean
+
+        # 2. Update rotation
+        # Quaternion averageing base on http://www.acsu.buffalo.edu/~johnc/ave_quat07.pdf
+        # https://github.com/christophhagen/averaging-quaternions
+        # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
+        identity = torch.zeros(rotations.shape, device=self.device)
+        identity[:, 0, :, :] = 1
+        rotations_valid = (rotations + identity) * \
+            object_cor[:, None, :, :].repeat(1, 4, 1, 1).type(torch.float32)
+        rotations_mean = torch.sum(rotations_valid, dim=(
+            2, 3)) / torch.sum(object_cor, dim=(1, 2))[:, None].repeat(1, 4)
+        pred_rot_wxyz = compose_quat(pred_rot_wxyz, rotations_mean)
 
         # 3. Update pred_points
         base_new = quat_to_rot(
@@ -658,8 +708,8 @@ class TrackNet6D(LightningModule):
         tensorboard_logs = {'train_loss': float(loss)}
 
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
-        # 'dis': total_dis, 'log': tensorboard_logs, 'progress_bar': {'train_dis': total_dis, 'train_loss': total_loss}}
-        return {'loss': loss, 'log': tensorboard_logs}
+        # 'dis': total_dis, 'log': tensorboard_logs,
+        return {'loss': loss, 'log': tensorboard_logs, 'progress_bar': {'loss_segmentation': log_scalars['loss_segmentation'], 'loss_pose_add': log_scalars['loss_pose_add']}}
 
     def validation_step(self, batch, batch_idx):
         self._mode = 'val'
@@ -963,9 +1013,8 @@ class TrackNet6D(LightningModule):
         # get the bounding box !
         w = 640
         h = 480
-        bs = img.shape[0]
 
-        real_img = torch.zeros((bs, 3, h, w), device=self.device)
+        real_img = torch.zeros((1, 3, h, w), device=self.device)
         # update the target to get new bb
 
         base_inital = quat_to_rot(

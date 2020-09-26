@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/debug/_" #debug
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_4_samples/_" #debug
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
@@ -32,10 +32,10 @@ model:
 
 loss:
   weight_semantic_segmentation: 1
-  weight_pose: 1
+  weight_pose: 100
 
 epochs: 500
-lr: 1.0e-3
+lr: 1.0e-4
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -59,15 +59,15 @@ training:
   max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 50
-  limit_val_batches: 10
+  limit_train_batches: 500
+  limit_val_batches: 5
 
 visu:
-  number_images_log_train: 2
-  number_images_log_test: 2
-  number_images_log_val: 2
+  number_images_log_train: 1
+  number_images_log_test: 1
+  number_images_log_val: 1
   network_input_batch: True
-  log_to_file: False
+  log_to_file: True
 
 early_stopping_cfg:
   patience: 100
@@ -79,7 +79,7 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 8
+  batch_size: 4
   num_workers: 4
   shuffle: True
   pin_memory: True
@@ -90,7 +90,7 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
+  obj_list_fil: null #null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
   obj_list_sym:
     - 12
     - 15
@@ -108,7 +108,7 @@ d_test:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: 4
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -116,6 +116,24 @@ d_test:
     refine: false
     add_depth_image: true
     add_mask_image: true
+
+    norm_render: true
+    color_jitter_render:
+      active: true
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    norm_real: true
+    color_jitter_real:
+      active: true
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+
     visu:
       status: true
       return_img: true
@@ -126,7 +144,7 @@ d_train:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: null # if not null add list with specific elements
+  obj_list_fil: null #null # if not null add list with specific elements
   obj_list_sym:
     - 12
     - 15
@@ -145,7 +163,7 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: 4
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -153,6 +171,24 @@ d_train:
     refine: false
     add_depth_image: true
     add_mask_image: true
+
+    norm_render: true
+    color_jitter_render:
+      active: true
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    norm_real: true
+    color_jitter_real:
+      active: true
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+
     visu:
       status: true
       return_img: true

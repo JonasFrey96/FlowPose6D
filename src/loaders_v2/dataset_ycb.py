@@ -57,6 +57,20 @@ class YCB(Backend):
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self._num_pt = cfg_d.get('num_points', 1000)
         self._trancolor = transforms.ColorJitter(0.2, 0.2, 0.2, 0.05)
+
+        if cfg_d['output_cfg'].get('color_jitter_real', {}).get('active', False):
+            self._color_jitter_real = transforms.ColorJitter(
+                cfg_d['output_cfg'].get('color_jitter_real', {}).get('cfg', False))
+        if cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
+            self._color_jitter_render = transforms.ColorJitter(
+                cfg_d['output_cfg'].get('color_jitter_render', {}).get('cfg', False))
+        if cfg_d['output_cfg'].get('norm_real', False):
+            self._norm_real = transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        if cfg_d['output_cfg'].get('norm_render', False):
+            self._norm_render = transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
         self._front_num = 2
         self._minimum_num_pt = 50
         self._xmap = np.array([[j for i in range(640)] for j in range(480)])
@@ -432,6 +446,15 @@ class YCB(Backend):
             b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
         gt_label_cropped = torch.round(up(tmp.type(
             torch.float32).unsqueeze(0))).clamp(0, 21 - 1)[0][0]
+
+        if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
+            render_img = self._color_jitter_render(render_img)
+        if self._cfg_d['output_cfg'].get('color_jitter_real', {}).get('active', False):
+            real_img = self._color_jitter_real(real_img)
+        if self._cfg_d['output_cfg'].get('norm_render', False):
+            render_img = self._norm_render(render_img)
+        if self._cfg_d['output_cfg'].get('norm_real', False):
+            real_img = self._norm_real(real_img)
 
         return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0])
 
