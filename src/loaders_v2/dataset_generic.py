@@ -5,6 +5,8 @@ import random
 class GenericDataset():
 
     def __init__(self, cfg_d, cfg_env):
+        self.overfitting_nr_idx = cfg_d['output_cfg'].get(
+            'overfitting_nr_idx', -1)
 
         if cfg_d['name'] == "ycb":
             self._backend = self._backend = YCB(cfg_d=cfg_d,
@@ -70,6 +72,9 @@ class GenericDataset():
             return self._backend._num_pt_mesh_large
 
     def __getitem__(self, index):
+        if self.overfitting_nr_idx != -1:
+            index = random.randrange(
+                0, self.overfitting_nr_idx) * 1000 % self._length
         seq = []
         one_object_visible = False
         # iterate over a sequence specified in the batch list

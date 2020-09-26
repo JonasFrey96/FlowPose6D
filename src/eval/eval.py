@@ -77,7 +77,7 @@ def compare_df(df_1, df_2=None, key='auc'):
     for m, i1, i2 in zip(metrics, idx_1, idx_2):
         v1 = '%.1f' % float(list(df_1['value'])[i1])
         v2 = '%.1f' % float(list(df_2['value'])[i2])
-        if v1 < v2:
+        if v1 > v2:
             v1 = BOLD + v1 + END
         else:
             v2 = BOLD + v2 + END

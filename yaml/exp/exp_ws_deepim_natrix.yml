@@ -9,21 +9,26 @@ mail: false
 model_mode: fit
 
 model:
-  df_load: True
+  df_load: False
   df_refiner: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
   df_pose_estimator: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
-  df_initial_guess: True
-  df_calc_refinement: True
+  df_initial_guess: False
+  df_calc_refinement: False
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
   df_refine_iterations: 2
+  inital_pose:
+    mode: "RotTransNoise" # 'TransNoise' 'RotTransNoise'  'RotNoise'
+    translation_noise_inital: 0.02
+    rot_noise_deg_inital: 30
+  sem_seg: True
 
 loss:
-  weight_semantic_segmentation: 0.5
-  weight_pose: 0.5
+  weight_semantic_segmentation: 1
+  weight_pose: 0.01
 
 epochs: 500
-lr: 1.0e-06
+lr: 1.0e-03
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -48,8 +53,8 @@ training:
   max_epochs: 100
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 2000
-  limit_val_batches: 200
+  limit_train_batches: 1000
+  limit_val_batches: 100
 
 visu:
   number_images_log_test: 1
@@ -69,8 +74,10 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 16
-  workers: 6
+  batch_size: 2
+  num_workers: 10
+  shuffle: True
+  pin_memory: True
 
 d_test:
   name: "ycb"

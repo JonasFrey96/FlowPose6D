@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/learn_segmentation/_" #debug
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/debug/_" #debug
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
@@ -11,18 +11,18 @@ mail: false
 model_mode: fit
 
 model:
-  df_load: True
+  df_load: False
   df_refiner: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
   df_pose_estimator: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
-  df_refine: True
+  df_refine: False
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
   df_refine_iterations: 1
-  df_dump_pred_pickle: True
+  df_dump_pred_pickle: False
   inital_pose:
-    mode: "DenseFusionInit" # 'TransNoise' 'RotTransNoise'  'RotNoise'
-    translation_noise_inital: 0.03
-    rot_noise_deg_inital: 5
+    mode: "RotTransNoise" # 'TransNoise' 'RotTransNoise'  'RotNoise'
+    translation_noise_inital: 0.02
+    rot_noise_deg_inital: 30
   mask:
     real_mask: True
     render_mask: True
@@ -30,8 +30,12 @@ model:
     render_depth_mask: True
   sem_seg: True
 
+loss:
+  weight_semantic_segmentation: 1
+  weight_pose: 1
+
 epochs: 500
-lr: 1.0e-5
+lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -56,13 +60,14 @@ training:
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
   limit_train_batches: 50
-  limit_val_batches: 5
+  limit_val_batches: 10
 
 visu:
+  number_images_log_train: 2
   number_images_log_test: 2
   number_images_log_val: 2
   network_input_batch: True
-  log_to_file: True
+  log_to_file: False
 
 early_stopping_cfg:
   patience: 100
@@ -74,8 +79,8 @@ samples_early_break_validation: 100000
 time_early_break_validation: 10
 
 loader:
-  batch_size: 2
-  num_workers: 10
+  batch_size: 8
+  num_workers: 4
   shuffle: True
   pin_memory: True
 
@@ -103,6 +108,8 @@ d_test:
     status: false
     noise_trans: 0.0
   output_cfg:
+    overfitting_nr_idx: 10
+    vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -138,6 +145,8 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
+    overfitting_nr_idx: 10
+    vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false

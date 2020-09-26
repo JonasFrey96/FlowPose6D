@@ -27,15 +27,20 @@ import logging
 import os
 import sys
 import pickle
+import glob
+import torchvision
+from pathlib import Path
+
+
 from estimation.state import State_R3xQuat, State_SE3, points
 from helper import rotation_angle, re_quat
 from visu import plot_pcd, plot_two_pcd
 from helper import generate_unique_idx
 from loaders_v2 import Backend, ConfigLoader
 from helper import flatten_dict, get_bbox_480_640
-import glob
-import torchvision
-from pathlib import Path
+from deep_im import ViewpointManager
+from helper import get_bb_from_depth, get_bb_real_target, backproject_points
+from rotations import *
 
 
 class YCB(Backend):
@@ -56,6 +61,17 @@ class YCB(Backend):
         self._minimum_num_pt = 50
         self._xmap = np.array([[j for i in range(640)] for j in range(480)])
         self._ymap = np.array([[i for i in range(640)] for j in range(480)])
+
+        if self._cfg_d['output_cfg'].get('vm_in_dataloader', False):
+            self._use_vm = True
+            store = cfg_env['p_ycb'] + '/viewpoints_renderings'
+            self._vm = ViewpointManager(
+                store=copy.deepcopy(store),
+                name_to_idx=copy.deepcopy(self._name_to_idx),
+                nr_of_images_per_object=5000,
+                device='cpu',
+                load_images=False)
+
         if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
             n = self._cfg_d['noise_cfg']
             self.input_jitter = torchvision.transforms.ColorJitter(
@@ -316,7 +332,108 @@ class YCB(Backend):
 
         tup = tup + (gt_rot_wxyz, gt_trans, unique_desig)
 
+        if self._use_vm:
+            new_tup = self.get_rendered_data(tup)
+            if new_tup is False:
+                return [False]
+
+            n_tup = (tup[0], 0, 0, *tup[3:6], 0, 0, *tup[8:13])
+            n_tup += new_tup
+            return n_tup
         return tup
+
+    def get_rendered_data(self, batch):
+        points, choose, img, target, model_points, idx = batch[0:6]
+        depth_img, label, img_orig, cam = batch[6:10]
+        gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
+
+        n = 30
+        m = 0.01
+        r = R.from_euler('zyx', np.random.normal(
+            0, n, (1, 3)), degrees=True)
+        a = RearangeQuat(1)
+        tn = a(torch.tensor(r.as_quat()), 'xyzw')
+
+        init_rot_wxyz = compose_quat(
+            torch.tensor(gt_rot_wxyz[None, :]), tn)
+        init_trans = torch.normal(mean=torch.tensor(gt_trans), std=m)
+
+        h = 480
+        w = 640
+        init_rot_mat = quat_to_rot(
+            init_rot_wxyz, 'wxyz').unsqueeze(1)
+        init_rot_mat = init_rot_mat.view(-1, 3, 3).permute(0, 2, 1)
+        pred_points = torch.add((model_points @ init_rot_mat), init_trans)
+
+        up = torch.nn.UpsamplingBilinear2d(size=(h, w))
+        render_img = torch.zeros((3, h, w))
+        render_d = torch.empty((1, h, w))
+
+        img_ren, depth, h_render = self._vm.get_closest_image_batch(
+            i=idx[None], rot=init_rot_wxyz, conv='wxyz')
+        bb_lsd = get_bb_from_depth(depth)
+        b = bb_lsd[0]
+        tl, br = b.limit_bb()
+        if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
+            # TODO invalid sample
+            return False
+        center_ren = backproject_points(
+            h_render[0, :3, 3].view(1, 3), fx=cam[2], fy=cam[3], cx=cam[0], cy=cam[1])
+        center_ren = center_ren.squeeze()
+        b.move(-center_ren[1], -center_ren[0])
+        b.expand(1.1)
+        b.expand_to_correct_ratio(w, h)
+        b.move(center_ren[1], center_ren[0])
+        crop_ren = b.crop(img_ren[0]).unsqueeze(0)
+
+        crop_ren = torch.transpose(crop_ren, 1, 3)
+        crop_ren = torch.transpose(crop_ren, 2, 3)
+        render_img = up(crop_ren)[0, :, :]
+
+        _d = depth.transpose(0, 2)
+        _d = _d.transpose(0, 1)
+        crop_d = b.crop(_d.type(
+            torch.float32))
+
+        crop_d = torch.transpose(crop_d, 0, 2)
+        crop_d = torch.transpose(crop_d, 1, 2)
+        render_d = up(crop_d[None])[0, :, :]
+
+        # real data
+        gt_label_cropped = torch.zeros(
+            (h, w), dtype=torch.long)
+        bb_lsd = get_bb_real_target(
+            pred_points, cam[None])
+        b = bb_lsd[0]
+        tl, br = b.limit_bb()
+        if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
+            # TODO invalid sample
+            return False
+        center_real = backproject_points(
+            init_trans[None], fx=cam[2], fy=cam[3], cx=cam[0], cy=cam[1])
+        center_real = center_real.squeeze()
+        b.move(-center_real[0], -center_real[1])
+        b.expand(1.1)
+        b.expand_to_correct_ratio(w, h)
+        b.move(center_real[0], center_real[1])
+        crop_real = b.crop(img_orig).unsqueeze(0)
+        up = torch.nn.UpsamplingBilinear2d(size=(h, w))
+        crop_real = torch.transpose(crop_real, 1, 3)
+        crop_real = torch.transpose(crop_real, 2, 3)
+        real_img = up(crop_real)[0]
+
+        crop_d = b.crop(depth_img[:, :, None].type(
+            torch.float32))[None]
+        crop_d = torch.transpose(crop_d, 1, 3)
+        crop_d = torch.transpose(crop_d, 2, 3)
+        real_d = up(crop_d)[0]
+
+        tmp = torch.transpose(torch.transpose(
+            b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
+        gt_label_cropped = torch.round(up(tmp.type(
+            torch.float32).unsqueeze(0))).clamp(0, 21 - 1)[0][0]
+
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0])
 
     def get_desig(self, path):
         desig = []

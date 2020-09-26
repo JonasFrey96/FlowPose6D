@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import copy
 import torch
 
+from .camera import backproject_points_batch, backproject_points, backproject_point
+
 
 class BoundingBox():
     def __init__(self, p1, p2):
@@ -216,3 +218,35 @@ class BoundingBox():
             plt.axis("off")
             plt.savefig('/home/jonfrey/Debug/test.png')
             plt.show()
+
+
+def get_bb_from_depth(depth):
+    bb_lsd = []
+    for d in depth:
+        masked_idx = (d != 0).nonzero()
+        min1 = torch.min(masked_idx[:, 0]).type(torch.float32)
+        max1 = torch.max(masked_idx[:, 0]).type(torch.float32)
+        min2 = torch.min(masked_idx[:, 1]).type(torch.float32)
+        max2 = torch.max(masked_idx[:, 1]).type(torch.float32)
+        bb_lsd.append(BoundingBox(p1=torch.stack(
+            [min1, min2]), p2=torch.stack([max1, max2])))
+    return bb_lsd
+
+
+def get_bb_real_target(target, cam):
+    bb_ls = []
+    for i in range(target.shape[0]):
+        # could not find a smart alternative to avoide looping
+        masked_idx = backproject_points(
+            target[i], fx=cam[i, 2], fy=cam[i, 3], cx=cam[i, 0], cy=cam[i, 1])
+        min1 = torch.min(masked_idx[:, 0])
+        max1 = torch.max(masked_idx[:, 0])
+        max2 = torch.max(masked_idx[:, 1])
+        min2 = torch.min(masked_idx[:, 1])
+
+        bb = BoundingBox(p1=torch.stack(
+            [min1, min2]), p2=torch.stack([max1, max2]))
+
+        bb_ls.append(bb)
+
+    return bb_ls

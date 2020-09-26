@@ -52,6 +52,7 @@ from lib.network import PoseNet, PoseRefineNet
 from loaders_v2 import GenericDataset
 from visu import Visualizer
 from helper import re_quat, flatten_dict
+from helper import get_bb_from_depth, get_bb_real_target
 from deep_im import DeepIM, ViewpointManager
 from helper import BoundingBox
 from helper import get_delta_t_in_euclidean, compute_auc
@@ -105,51 +106,6 @@ def get_inital(mode, gt_rot_wxyz, gt_trans, pred_r_current, pred_t_current, cfg=
             gt_rot_wxyz, tn)
         pred_trans = torch.normal(mean=gt_trans, std=m)
     return pred_rot_wxyz, pred_trans
-
-
-def get_bb_from_depth(depth):
-    bb_lsd = []
-    for d in depth:
-        masked_idx = (d != 0).nonzero()
-        min1 = torch.min(masked_idx[:, 0]).type(torch.float32)
-        max1 = torch.max(masked_idx[:, 0]).type(torch.float32)
-        min2 = torch.min(masked_idx[:, 1]).type(torch.float32)
-        max2 = torch.max(masked_idx[:, 1]).type(torch.float32)
-        bb_lsd.append(BoundingBox(p1=torch.stack(
-            [min1, min2]), p2=torch.stack([max1, max2])))
-    return bb_lsd
-
-
-def get_bb_real_target(target, cam, gt_trans):
-    bb_ls = []
-    # ret = backproject_points_batch(
-    #     target, fx=cam[:, 2], fy=cam[:, 3], cx=cam[:, 0], cy=cam[:, 1])
-    # min_val, min_ind = torch.min(ret, dim=1, keepdim=True)
-    # max_val, max_ind = torch.max(ret, dim=1, keepdim=True)
-
-    for i in range(target.shape[0]):
-        # could not find a smart alternative to avoide looping
-        masked_idx = backproject_points(
-            target[i], fx=cam[i, 2], fy=cam[i, 3], cx=cam[i, 0], cy=cam[i, 1])
-        min1 = torch.min(masked_idx[:, 0])
-        max1 = torch.max(masked_idx[:, 0])
-        max2 = torch.max(masked_idx[:, 1])
-        min2 = torch.min(masked_idx[:, 1])
-
-        bb = BoundingBox(p1=torch.stack(
-            [min1, min2]), p2=torch.stack([max1, max2]))
-
-        # val_image = img_orig[i, :, :, :].cpu().numpy()
-        # bb.plot(val_image)
-
-        # center_real = backproject_point(
-        # gt_trans[i, :], fx=cam[i, 2], fy=cam[i, 3], cx=cam[i, 0], cy=cam[i, 1])
-        # bb.move(-center_real[1], -center_real[0])
-        bb_ls.append(bb)
-
-    return bb_ls
-
-# TODO Move if finalized to other files
 
 
 def ret_cropped_image(img):
@@ -215,6 +171,7 @@ def check_exp(exp):
 class TrackNet6D(LightningModule):
     def __init__(self, exp, env):
         super().__init__()
+        self._mode = 'init'
 
         # check exp for errors
         check_exp(exp)
@@ -300,6 +257,13 @@ class TrackNet6D(LightningModule):
             print('Logging to File')
 
     def forward(self, batch):
+        # for i in range(len(batch)):
+        #     try:
+        #         batch[i].to(self.device, non_blocking=True)
+        #     except:
+        #         pass
+
+        st = time.time()
         if self.visualizer is None:
             self.visualizer = Visualizer(self.exp['model_path'] +
                                          '/visu/', self.logger.experiment)
@@ -308,8 +272,123 @@ class TrackNet6D(LightningModule):
         points, choose, img, target, model_points, idx = batch[0:6]
         depth_img, label, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
-        bs = points.shape[0]
         log_scalars = {}
+        bs = points.shape[0]
+
+        if len(batch) > 13:
+            # check if skip
+            if batch[13] is False:
+                loss = torch.zeros(
+                    bs.shape, requires_grad=True, dtype=torch.float32, device=self.device)
+                pred_rot_wxyz = torch.zeros(
+                    gt_rot_wxyz.shape, device=self.device)
+                pred_rot_wxyz[:, 0] = 1
+                pred_trans = torch.zeros(gt_trans.shape, device=self.device)
+                return loss, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
+
+            real_img, render_img, real_d, render_d, gt_label_cropped, pred_rot_wxyz, pred_trans, pred_points = batch[
+                13:]
+            refine_iterations = 1
+        else:
+            pred_rot_wxyz, pred_trans, pred_points = forward_init_data(
+                log_scalars)
+            refine_iterations = get_ref_ite(self.exp)
+
+        valid_samples = torch.ones((bs), device=self.device, dtype=torch.bool)
+
+        for i in range(refine_iterations):
+            if not(len(batch) > 13):
+                real_img, render_img, real_d, render_d, gt_label_cropped = self.forward_prep_data(
+                    idx, pred_rot_wxyz, pred_trans, pred_points, depth, cam, label)
+
+            # stack the two images, might add additional mask as layer or depth info
+            data = torch.cat([real_img, render_img], dim=1)
+
+            # TODO idx is currently unused !!!!
+            delta_v, rotations, p_label = self.pixelwise_refiner(
+                data, idx)
+
+            if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
+                self._k += 1
+                seg_max = p_label.argmax(dim=1)
+                self.visualizer.plot_segmentation(tag=f'gt_segmentation_cropped_{self._mode}_nr_{self.counter_images_logged}',
+                                                  epoch=self.current_epoch,
+                                                  label=gt_label_cropped[0].cpu(
+                                                  ).numpy(),
+                                                  store=True)
+                try:
+                    self.visualizer.plot_segmentation(tag=f'gt_segmentation_{self._mode}_nr_{self.counter_images_logged}',
+                                                      epoch=self.current_epoch,
+                                                      label=label[0].cpu(
+                                                      ).numpy(),
+                                                      store=True)
+                except:
+                    pass
+                self.visualizer.plot_segmentation(tag=f'predicted_segmentation_{self._mode}_nr_{self.counter_images_logged}',
+                                                  epoch=self.current_epoch,
+                                                  label=seg_max[0].cpu(
+                                                  ).numpy(),
+                                                  store=True)
+                self.visualizer.visu_network_input(tag=f'network_input_{self._mode}_nr_{self.counter_images_logged}',
+                                                   epoch=self.current_epoch,
+                                                   data=data,
+                                                   max_images=10,
+                                                   store=True,
+                                                   jupyter=False)
+                self.visualizer.plot_batch_projection(tag=f'batch_projection_{self._mode}_nr_{self.counter_images_logged}',
+                                                      epoch=self.current_epoch,
+                                                      images=img_orig,
+                                                      target=pred_points,
+                                                      cam=cam,
+                                                      max_images=10,
+                                                      store=True,
+                                                      jupyter=False)
+
+            pred_trans, pred_rot_wxyz, pred_points = self.forward_pose(delta_v, rotations, pred_trans,
+                                                                       pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
+
+        focal_loss = self.criterion_focal(
+            p_label, gt_label_cropped)
+
+        # Compute ADD / ADD-S loss
+        dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
+                                  target=target, model_points=model_points, idx=idx)
+        # dis = dis  * valid_samples
+
+        if exp.get('model', {}).get('df_load', False):
+            log_scalars[f'df_ref_dis'] = float(
+                torch.mean(df_ref_dis, dim=0).detach())
+            if exp.get('model', {}).get('df_refine', False):
+                log_scalars[f'df_ref_dis'] = float(
+                    torch.mean(df_ref_dis, dim=0).detach())
+
+        if torch.isnan(dis).any() or \
+                torch.isnan(pred_rot_wxyz).any() or \
+                torch.isnan(pred_trans).any():
+            pass
+
+        w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
+        w_p = self.exp.get('loss', {}).get('weight_pose', 0.5)
+        loss = w_s * focal_loss + w_p * dis
+
+        if torch.sum(valid_samples) == 0:
+            loss = torch.zeros(
+                dis.shape, requires_grad=True, dtype=torch.float32, device=self.device)
+
+            pred_rot_wxyz = torch.zeros(
+                pred_rot_wxyz.shape, device=self.device)
+            pred_rot_wxyz[:, 0] = 1
+            pred_trans = torch.zeros(pred_trans.shape, device=self.device)
+
+        return loss, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
+
+    def forward_init_data(self, batch, log_scalars):
+        for i in range(0, 10):
+            if torch.isnan(batch[i]).any():
+                raise Exception
+
+        bs = points.shape[0]
+
         if self.exp.get('model', {}).get('df_load', False):
             # introduce new tensors for full tracking dense fusion
             st = time.time()
@@ -340,17 +419,6 @@ class TrackNet6D(LightningModule):
                 target, model_points, idx,
                 points, w, refine_start, self.device)
 
-            # while 1:
-            #     _, which_max = torch.max(pred_c, 1)
-            #     failed = False
-            #     for _j in range(0, bs):
-            #         if not points[_j, which_max[_j], 2] > 0.2 and points[_j, which_max[_j], 2] < 1.6:
-            #             failed = True
-            #             pred_c[_j, which_max[_j], 0] = 0
-            #     if failed == False:
-            #         break
-            #     else:
-            #         print('which max was invalid point')
             _, which_max = torch.max(pred_c, 1)
             which_max = which_max.squeeze(1)
             enum = torch.range(
@@ -358,10 +426,14 @@ class TrackNet6D(LightningModule):
             pred_r_current = pred_r[enum, which_max, :]
             pred_t_current = pred_t[enum, which_max,
                                     :] + points[enum, which_max, :]
+        else:
+            pred_r_current = gt_rot_wxyz
+            pred_t_current = gt_trans
 
             # Select the inital rotation and translation for iterative refinement
         mode = self.exp.get('model', {}).get(
             'inital_pose', {}).get('mode', {'TransNoise'})
+
         pred_rot_wxyz, pred_trans = get_inital(
             mode=mode,
             gt_rot_wxyz=gt_rot_wxyz,
@@ -377,252 +449,190 @@ class TrackNet6D(LightningModule):
         init_rot_mat = init_rot_mat.view(-1, 3, 3).permute(0, 2, 1)
         pred_points = torch.add(
             torch.bmm(model_points, init_rot_mat), pred_trans.unsqueeze(1))
-
+        store = pred_points.clone()
         w = 640
         h = 480
         bs = img.shape[0]
 
-        valid_samples = torch.ones((bs), device=self.device, dtype=torch.bool)
-        refine_iterations = get_ref_ite(self.exp)
+        return pred_rot_wxyz, pred_trans, pred_points
 
-        for i in range(0, refine_iterations):
+    def forward_prep_data(self, idx, pred_rot_wxyz, pred_trans, pred_points, depth, cam, label):
+        w = 640
+        h = 480
+        bs = img.shape[0]
 
-            # check if the current estimate of the objects position is within some bound
-            # translation bounding:
-            deviation = torch.abs(torch.norm(pred_trans - gt_trans, dim=1))
-            for j in range(0, bs):
-                if deviation[j] > self.exp.get('training', {}).get('trans_deviation_resample_inital_pose', 0.3):
-                    pred_trans[j] = torch.normal(
-                        mean=gt_trans[j], std=self.exp.get('training', {}).get('translation_noise_inital', 0.03))
+        # check if the current estimate of the objects position is within some bound
+        # translation bounding:
+        # deviation = torch.abs(torch.norm(pred_trans - gt_trans, dim=1))
+        # for j in range(0, bs):
+        #     if deviation[j] > self.exp.get('training', {}).get('trans_deviation_resample_inital_pose', 0.3):
+        #         pred_trans[j] = torch.normal(
+        #             mean=gt_trans[j], std=self.exp.get('training', {}).get('translation_noise_inital', 0.03))
+        # deviation_post = torch.abs(
+        #     torch.norm(pred_trans - gt_trans, dim=1))
+        # if torch.sum(deviation) != torch.sum(deviation_post):
+        #     # valid_samples[i] = False
+        #     pass
 
-            deviation_post = torch.abs(
-                torch.norm(pred_trans - gt_trans, dim=1))
-            if torch.sum(deviation) != torch.sum(deviation_post):
-                # valid_samples[i] = False
-                pass
+        render_img = torch.zeros((bs, 3, h, w), device=self.device)
+        render_d = torch.empty((bs, 1, h, w), device=self.device)
+        # preper render data
+        st = time.time()
+        img_ren, depth, h_render = self.vm.get_closest_image_batch(
+            i=idx, rot=pred_rot_wxyz, conv='wxyz')
 
-            render_img = torch.zeros((bs, 3, h, w), device=self.device)
-            render_d = torch.empty((bs, 1, h, w), device=self.device)
-            # preper render data
-            st = time.time()
-            img_ren, depth, h_render = self.vm.get_closest_image_batch(
-                i=idx, rot=pred_rot_wxyz, conv='wxyz')
+        bb_lsd = get_bb_from_depth(depth)
+        for j, b in enumerate(bb_lsd):
+            tl, br = b.limit_bb()
+            if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
+                valid_samples[j] = False
+                b.set_max()
+                print("Depth BoundingBox violated the min size constrain", j)
 
-            bb_lsd = get_bb_from_depth(depth)
-            for j, b in enumerate(bb_lsd):
-                tl, br = b.limit_bb()
-                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
-                    valid_samples[j] = False
-                    b.set_max()
-                    print("Depth BoundingBox violated the min size constrain", j)
+            center_ren = backproject_points(
+                h_render[j, :3, 3].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
+            center_ren = center_ren.squeeze()
+            b.move(-center_ren[1], -center_ren[0])
+            b.expand(1.1)
+            b.expand_to_correct_ratio(w, h)
+            b.move(center_ren[1], center_ren[0])
+            crop_ren = b.crop(img_ren[j]).unsqueeze(0)
 
-                center_ren = backproject_points(
-                    h_render[j, :3, 3].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
-                center_ren = center_ren.squeeze()
-                b.move(-center_ren[1], -center_ren[0])
-                b.expand(1.1)
-                b.expand_to_correct_ratio(w, h)
-                b.move(center_ren[1], center_ren[0])
-                crop_ren = b.crop(img_ren[j]).unsqueeze(0)
+            crop_ren = torch.transpose(crop_ren, 1, 3)
+            crop_ren = torch.transpose(crop_ren, 2, 3)
+            render_img[j] = self.up(crop_ren)
+            crop_d = b.crop(depth[j, :, :, None].type(
+                torch.float32))[None, :, :, :, ]
+            crop_d = torch.transpose(crop_d, 1, 3)
+            crop_d = torch.transpose(crop_d, 2, 3)
+            render_d[j] = self.up(crop_d)
 
-                crop_ren = torch.transpose(crop_ren, 1, 3)
-                crop_ren = torch.transpose(crop_ren, 2, 3)
-                render_img[j] = self.up(crop_ren)
-                crop_d = b.crop(depth[j, :, :, None].type(
-                    torch.float32))[None, :, :, :, ]
-                crop_d = torch.transpose(crop_d, 1, 3)
-                crop_d = torch.transpose(crop_d, 2, 3)
-                render_d[j] = self.up(crop_d)
+        # prepare real data
+        real_img = torch.empty((bs, 3, h, w), device=self.device)
+        real_d = torch.empty((bs, 1, h, w), device=self.device)
 
-            # prepare real data
-            real_img = torch.empty((bs, 3, h, w), device=self.device)
-            real_d = torch.empty((bs, 1, h, w), device=self.device)
+        if self.exp['model'].get('sem_seg', False):
+            gt_label_cropped = torch.zeros(
+                (bs, h, w), device=self.device, dtype=torch.long)
+        # update the target to get new bb
+        bb_ls = get_bb_real_target(pred_points, cam)
+        for j, b in enumerate(bb_ls):
+
+            tl, br = b.limit_bb()
+            if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
+                valid_samples[j] = False
+                b.set_max()
+                print("Real BoundingBox violated the min size constrain", j)
+
+            center_real = backproject_points(
+                pred_trans[j].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
+            center_real = center_real.squeeze()
+            b.move(-center_real[0], -center_real[1])
+            b.expand(1.1)
+            b.expand_to_correct_ratio(w, h)
+            b.move(center_real[0], center_real[1])
+            crop_real = b.crop(img_orig[j]).unsqueeze(0)
+            up = torch.nn.UpsamplingBilinear2d(size=(h, w))
+            crop_real = torch.transpose(crop_real, 1, 3)
+            crop_real = torch.transpose(crop_real, 2, 3)
+            real_img[j] = self.up(crop_real)
+
+            crop_d = b.crop(depth_img[j, :, :, None].type(
+                torch.float32))[None, :, :, :, ]
+            crop_d = torch.transpose(crop_d, 1, 3)
+            crop_d = torch.transpose(crop_d, 2, 3)
+            real_d[j] = self.up(crop_d)
 
             if self.exp['model'].get('sem_seg', False):
-                gt_label_cropped = torch.zeros(
-                    (bs, h, w), device=self.device, dtype=torch.long)
-            # update the target to get new bb
-            bb_ls = get_bb_real_target(pred_points, cam, pred_trans)
-            for j, b in enumerate(bb_ls):
+                tmp = torch.transpose(torch.transpose(
+                    b.crop(label[j].unsqueeze(2)), 0, 2), 1, 2)
+                gt_label_cropped[j] = torch.round(up(tmp.type(
+                    torch.float32).unsqueeze(0))).clamp(0, self.exp['d_train']['objects'] - 1).squeeze(2)
 
-                tl, br = b.limit_bb()
-                if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
-                    valid_samples[j] = False
-                    b.set_max()
-                    print("Real BoundingBox violated the min size constrain", j)
+        return real_img, render_img, real_d, render_d, gt_label_cropped
 
-                center_real = backproject_points(
-                    pred_trans[j].view(1, 3), fx=cam[j, 2], fy=cam[j, 3], cx=cam[j, 0], cy=cam[j, 1])
-                center_real = center_real.squeeze()
-                b.move(-center_real[0], -center_real[1])
-                b.expand(1.1)
-                b.expand_to_correct_ratio(w, h)
-                b.move(center_real[0], center_real[1])
-                crop_real = b.crop(img_orig[j]).unsqueeze(0)
-                up = torch.nn.UpsamplingBilinear2d(size=(h, w))
-                crop_real = torch.transpose(crop_real, 1, 3)
-                crop_real = torch.transpose(crop_real, 2, 3)
-                real_img[j] = self.up(crop_real)
-
-                crop_d = b.crop(depth_img[j, :, :, None].type(
-                    torch.float32))[None, :, :, :, ]
-                crop_d = torch.transpose(crop_d, 1, 3)
-                crop_d = torch.transpose(crop_d, 2, 3)
-                real_d[j] = self.up(crop_d)
-
-                if self.exp['model'].get('sem_seg', False):
-                    tmp = torch.transpose(torch.transpose(
-                        b.crop(label[j].unsqueeze(2)), 0, 2), 1, 2)
-                    gt_label_cropped[j] = torch.round(up(tmp.type(
-                        torch.float32).unsqueeze(0))).clamp(0, self.exp['d_train']['objects'] - 1).squeeze(2)
-
-            # stack the two images, might add additional mask as layer or depth info
-            data = torch.cat([real_img, render_img], dim=1)
-
-            # TODO idx is cureently unused !!!!
-            delta_v, rotations, p_label = self.pixelwise_refiner(
-                data, idx)
-
-            if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
-                self._k += 1
-                seg_max = p_label.argmax(dim=1)
-                self.visualizer.plot_segmentation(tag=f'gt_segmentation_cropped',
-                                                  epoch=self.current_epoch,
-                                                  label=gt_label_cropped[0].cpu(
-                                                  ).numpy(),
-                                                  store=True)
-                self.visualizer.plot_segmentation(tag=f'gt_segmentation',
-                                                  epoch=self.current_epoch,
-                                                  label=label[0].cpu(
-                                                  ).numpy(),
-                                                  store=True)
-                self.visualizer.plot_segmentation(tag=f'predicted_segmentation',
-                                                  epoch=self.current_epoch,
-                                                  label=seg_max[0].cpu(
-                                                  ).numpy(),
-                                                  store=True)
-                self.visualizer.visu_network_input(tag=f'network_input',
-                                                   epoch=self.current_epoch,
-                                                   data=data,
-                                                   max_images=10,
-                                                   store=True,
-                                                   jupyter=False)
-                self.visualizer.plot_batch_projection(tag=f'batch_projection',
-                                                      epoch=self.current_epoch,
-                                                      images=img_orig,
-                                                      target=pred_points,
-                                                      cam=cam,
-                                                      max_images=10,
-                                                      store=True,
-                                                      jupyter=False)
-
+    def forward_pose(self, delta_v, rotations, pred_trans, pred_rot_wxyz, model_points, cam, idx, gt_label_cropped):
+        bs = model_points.shape[0]
+        idx_v = torch.abs(delta_v[:, :2]) > 100
+        while idx_v.any():
             idx_v = torch.abs(delta_v[:, :2]) > 100
-            while idx_v.any():
-                idx_v = torch.abs(delta_v[:, :2]) > 100
-                delta_v[:, :2][idx_v] = delta_v[:, :2][idx_v] * 0.5
+            delta_v[:, :2][idx_v] = delta_v[:, :2][idx_v] * 0.5
 
+        idx_z = torch.abs(delta_v[:, 2]) > 0.2
+        while idx_z.any():
             idx_z = torch.abs(delta_v[:, 2]) > 0.2
-            while idx_z.any():
-                idx_z = torch.abs(delta_v[:, 2]) > 0.2
-                delta_v[:, 2][idx_z] = delta_v[:, 2][idx_z] * 0.5
+            delta_v[:, 2][idx_z] = delta_v[:, 2][idx_z] * 0.5
 
-            # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
-            # 1. Update translation prediction
-            s = delta_v.shape
-            delta_v2 = delta_v.contiguous().view(-1, 3).contiguous()
-            pred_trans_batch = pred_trans.unsqueeze(2).unsqueeze(2).repeat(
-                1, 1, s[2], s[3]).contiguous().view(-1, 3).contiguous()
-            cam_batch = cam.unsqueeze(2).unsqueeze(2).repeat(
-                1, 1, s[2], s[3]).contiguous().view(-1, 4).contiguous()
-            # image coordinates to euclidean distance
-            pred_trans_new = get_delta_t_in_euclidean(
-                delta_v2, t_src=pred_trans_batch,
-                fx=cam_batch[:, 2].unsqueeze(1), fy=cam_batch[:, 3].unsqueeze(1), device=self.device)
-            delta_t = pred_trans_new - pred_trans_batch
-            delta_t = delta_t.contiguous().view(s)
-            # delta_t can be used for bookkeeping to keep track of the translation
-            # limit delta_t to be within 10cm
-            val = self.exp.get('training', {}).get(
-                'clamp_delta_t_pred', 0.1)
-            delta_t_clamp = torch.clamp(delta_t, -val, val)
-            pred_trans_batch = pred_trans_batch.view(
-                s) + delta_t_clamp
-            # calculate based on predicted semantic segmentation the pred_trans_mean
-            true_res = idx.unsqueeze(2).unsqueeze(3).repeat(
-                1, 1, s[2], s[3])
-            object_cor = gt_label_cropped == idx.unsqueeze(2).repeat(
-                1, s[2], s[3])
-            valid_sum = torch.sum(object_cor.view(bs, -1), dim=1)
-            valid_sum = torch.clamp(valid_sum, 1, 10.0e6)
-            pred_trans_batch_valid = object_cor.unsqueeze(1).repeat(
-                1, 3, 1, 1) * pred_trans_batch
-            pred_trans_mean = torch.sum(
-                pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
+        # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
+        # 1. Update translation prediction
+        s = delta_v.shape
+        delta_v2 = delta_v.contiguous().view(-1, 3).contiguous()
+        pred_trans_batch = pred_trans.unsqueeze(2).unsqueeze(2).repeat(
+            1, 1, s[2], s[3]).contiguous().view(-1, 3).contiguous()
+        cam_batch = cam.unsqueeze(2).unsqueeze(2).repeat(
+            1, 1, s[2], s[3]).contiguous().view(-1, 4).contiguous()
+        # image coordinates to euclidean distance
+        pred_trans_new = get_delta_t_in_euclidean(
+            delta_v2, t_src=pred_trans_batch,
+            fx=cam_batch[:, 2].unsqueeze(1), fy=cam_batch[:, 3].unsqueeze(1), device=self.device)
+        delta_t = pred_trans_new - pred_trans_batch
+        delta_t = delta_t.contiguous().view(s)
+        # delta_t can be used for bookkeeping to keep track of the translation
+        # limit delta_t to be within 10cm
+        val = self.exp.get('training', {}).get(
+            'clamp_delta_t_pred', 0.1)
+        delta_t_clamp = torch.clamp(delta_t, -val, val)
+        pred_trans_batch = pred_trans_batch.view(
+            s) + delta_t_clamp
+        # calculate based on predicted semantic segmentation the pred_trans_mean
+        true_res = idx.unsqueeze(2).unsqueeze(3).repeat(
+            1, 1, s[2], s[3])
+        object_cor = gt_label_cropped == idx.unsqueeze(2).repeat(
+            1, s[2], s[3])
+        valid_sum = torch.sum(object_cor.view(bs, -1), dim=1)
+        valid_sum = torch.clamp(valid_sum, 1, 10.0e6)
+        pred_trans_batch_valid = object_cor.unsqueeze(1).repeat(
+            1, 3, 1, 1) * pred_trans_batch
+        pred_trans_mean = torch.sum(
+            pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
 
-            # 2. Update rotation
-            # Quaternion averageing base on http://www.acsu.buffalo.edu/~johnc/ave_quat07.pdf
-            # https://github.com/christophhagen/averaging-quaternions
-            # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
-            identity = torch.zeros(rotations.shape, device=self.device)
-            identity[:, 0, :, :] = 1
-            rotations_valid = object_cor.unsqueeze(1).repeat(
-                1, 4, 1, 1) * (rotations + identity)
-            rotations_mean = torch.sum(
-                rotations_valid.view(bs, 4, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 4)
-            pred_rot_wxyz = compose_quat(pred_rot_wxyz, rotations_mean)
+        # 2. Update rotation
+        # Quaternion averageing base on http://www.acsu.buffalo.edu/~johnc/ave_quat07.pdf
+        # https://github.com/christophhagen/averaging-quaternions
+        # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
+        identity = torch.zeros(rotations.shape, device=self.device)
+        identity[:, 0, :, :] = 1
 
-            # 3. Update pred_points
-            base_new = quat_to_rot(
-                pred_rot_wxyz.clone(), 'wxyz', device=self.device).unsqueeze(1)
-            base_new = base_new.view(-1, 3, 3).permute(0, 2, 1)
-            pred_points = torch.add(
-                torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
+        enum = torch.range(
+            0, bs - 1, device=self.device, dtype=torch.long)
 
-        test_ten = torch.ones(gt_label_cropped.shape,
-                              device=self.device, dtype=torch.long)
-        # try:
-        inp = label.type(torch.int64)
-        inp = torch.clamp(inp, min=0, max=p_label.shape[1] - 1)
-        loss_segmentation = self.criterion_focal(
-            p_label, inp)
+        rotations_valid = (rotations + identity) * \
+            object_cor[:, None, :, :].repeat(1, 4, 1, 1).type(torch.float32)
+        rotations_mean = torch.sum(rotations_valid, dim=(
+            2, 3)) / torch.sum(object_cor, dim=(1, 2))[:, None].repeat(1, 4)
 
-        # except:
-        #     focal_loss = self.criterion_focal(
-        #         p_label, te)
-        #     print(gt_label_cropped.shape,
-        #           gt_label_cropped.device, gt_label_cropped.dtype)
+        # 3. Update pred_points
+        base_new = quat_to_rot(
+            pred_rot_wxyz.clone(), 'wxyz', device=self.device).unsqueeze(1)
+        base_new = base_new.view(-1, 3, 3).permute(0, 2, 1)
+        pred_points = torch.add(
+            torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
 
-        # Compute ADD / ADD-S loss
-        dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
-                                  target=target, model_points=model_points, idx=idx)
-        dis = dis * valid_samples
-
-        if exp.get('model', {}).get('df_load', False):
-            log_scalars[f'df_ref_dis'] = float(
-                torch.mean(df_ref_dis, dim=0).detach())
-            if exp.get('model', {}).get('df_refine', False):
-                log_scalars[f'df_ref_dis'] = float(
-                    torch.mean(df_ref_dis, dim=0).detach())
-        # if self.exp['model'].get('sem_seg', False):
-            # log_scalars[f'focal_loss'] = float(
-                # torch.mean(focal_loss, dim=0).detach())
-
-        if torch.isnan(dis).any():
-            assert Exception
-
-        w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
-        w_p = self.exp.get('loss', {}).get('weight_pose', 0.5)
-        loss = w_s * loss_segmentation + w_p * dis
-
-        return loss, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
+        return pred_trans, pred_rot_wxyz, pred_points
 
     def training_step(self, batch, batch_idx):
+        self._mode = 'train'
         st = time.time()
-        self.visu_forward = False
         total_loss = 0
         total_dis = 0
+        nr = self.exp.get('visu', {}).get('number_images_log_train', 1)
+        if self.counter_images_logged < nr:
+            self.visu_forward = True
+        else:
+            self.visu_forward = False
 
-        dis, _, _, log_scalars = self(batch[0])
+        # forward
+        dis, pred_r, pred_t, log_scalars = self(batch[0])
 
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         bs = batch[0][0].shape[0]
@@ -632,7 +642,9 @@ class TrackNet6D(LightningModule):
             [thr] * bs, device=self.device), dis)
 
         loss = torch.mean(dis)
-        # for epoch average logging
+        self.visu_step(nr, batch, pred_r, pred_t, batch_idx)
+
+        # # for epoch average logging
         try:
             self._dict_track['train_loss  [+inf - 0]'].append(float(loss))
             self._dict_track[f'train_adds_2cm  [0 - 1]'].append(
@@ -644,22 +656,30 @@ class TrackNet6D(LightningModule):
 
         # tensorboard logging
         tensorboard_logs = {'train_loss': float(loss)}
+
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
-        #                     'train_loss_without_motion': float(0)}
         # 'dis': total_dis, 'log': tensorboard_logs, 'progress_bar': {'train_dis': total_dis, 'train_loss': total_loss}}
         return {'loss': loss, 'log': tensorboard_logs}
 
     def validation_step(self, batch, batch_idx):
+        self._mode = 'val'
+        st = time.time()
+
         total_loss = 0
         total_dis = 0
 
-        st = time.time()
-        dis, pred_r, pred_t, log_scalars = self(batch[0])
-        if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_val', 1):
+        nr = self.exp.get('visu', {}).get('number_images_log_val', 1)
+        if self.counter_images_logged < nr:
             self.visu_forward = True
+        else:
+            self.visu_forward = False
+
+        # forward
+        dis, pred_r, pred_t, log_scalars = self(batch[0])
+
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         bs = batch[0][0].shape[0]
-        unique_desig = batch[0][-1]
+        unique_desig = batch[0][12]
         thr = self.exp.get('eval', {}).get('threshold_add', 0.02)
         # check if smaller ADD / ADD-s < 2cm
         within_add = torch.ge(torch.tensor(
@@ -667,16 +687,7 @@ class TrackNet6D(LightningModule):
 
         loss = torch.mean(torch.sum(dis))
 
-        if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_val', 1):
-            self.counter_images_logged += 1
-            points, choose, img, target, model_points, idx = batch[0][0:6]
-            depth_img, label_img, img_orig, cam = batch[0][6:10]
-            gt_rot_wxyz, gt_trans, unique_desig = batch[0][10:13]
-            self.visu_pose(batch_idx, pred_r[0], pred_t[0],
-                           target[0], model_points[0], cam[0], img_orig[0], unique_desig, idx[0])
-            # for epoch average logging
-        else:
-            self.visu_forward = False
+        self.visu_step(nr, batch, pred_r, pred_t, batch_idx)
 
         try:
             for _i in range(0, bs):
@@ -720,16 +731,26 @@ class TrackNet6D(LightningModule):
         return {'val_loss': val_loss, 'val_dis': val_dis, 'log': tensorboard_logs}
 
     def test_step(self, batch, batch_idx):
+        self._mode = 'test'
         total_loss = 0
         total_dis = 0
 
         st = time.time()
-        dis, pred_r, pred_t, log_scalars = self(batch[0])
-        if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_test', 1):
+
+        nr = self.exp.get('visu', {}).get('number_images_log_test', 1)
+        if self.counter_images_logged < nr:
             self.visu_forward = True
+        else:
+            self.visu_forward = False
+
+        print(
+            f'Visu Forward {self.visu_forward}, already logged {self.counter_images_logged}')
+
+        # forward
+        dis, pred_r, pred_t, log_scalars = self(batch[0])
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         bs = batch[0][0].shape[0]
-        unique_desig = batch[0][-1]
+        unique_desig = batch[0][12]
         thr = self.exp.get('eval', {}).get('threshold_add', 0.02)
         # check if smaller ADD / ADD-s < 2cm
         within_add = torch.ge(torch.tensor(
@@ -737,16 +758,7 @@ class TrackNet6D(LightningModule):
 
         loss = torch.mean(torch.sum(dis))
 
-        if self.counter_images_logged < self.exp.get('visu', {}).get('number_images_log_test', 1):
-            self.counter_images_logged += 1
-            points, choose, img, target, model_points, idx = batch[0][0:6]
-            depth_img, label_img, img_orig, cam = batch[0][6:10]
-            gt_rot_wxyz, gt_trans, unique_desig = batch[0][10:13]
-            self.visu_pose(batch_idx, pred_r[0], pred_t[0],
-                           target[0], model_points[0], cam[0], img_orig[0], unique_desig, idx[0])
-            # for epoch average logging
-        else:
-            self.visu_forward = False
+        self.visu_step(nr, batch, pred_r, pred_t, batch_idx)
 
         try:
             for _i in range(0, bs):
@@ -796,9 +808,19 @@ class TrackNet6D(LightningModule):
         test_dis = loss
         return {'test_loss': test_loss, 'test_dis': test_dis, 'log': tensorboard_logs}
 
+    def visu_step(self, nr, batch, pred_r, pred_t, batch_idx):
+        if self.visu_forward:
+            self.counter_images_logged += 1
+            points, choose, img, target, model_points, idx = batch[0][0:6]
+            depth_img, label_img, img_orig, cam = batch[0][6:10]
+            gt_rot_wxyz, gt_trans, unique_desig = batch[0][10:13]
+            self.visu_pose(batch_idx, pred_r[0], pred_t[0],
+                           target[0], model_points[0], cam[0], img_orig[0], unique_desig, idx[0])
+
     def validation_epoch_end(self, outputs):
-        self.visu_forward = False
         avg_dict = {}
+        self.counter_images_logged = 0  # reset image log counter
+
         # only keys that are logged in tensorboard are removed from log_scalars !
         for old_key in list(self._dict_track.keys()):
             if old_key.find('val') == -1:
@@ -815,8 +837,6 @@ class TrackNet6D(LightningModule):
 
             self._dict_track.pop(old_key, None)
 
-        self.counter_images_logged = 0  # reset image log counter
-
         df1 = dict_to_df(avg_dict)
         df2 = dict_to_df(get_df_dict(pre='val'))
         img = compare_df(df1, df2, key='auc [0 - 100]')
@@ -832,7 +852,7 @@ class TrackNet6D(LightningModule):
                 'log': avg_dict}
 
     def train_epoch_end(self, outputs):
-        self.visu_forward = False
+        self.counter_images_logged = 0  # reset image log counter
         avg_dict = {}
         for old_key in list(self._dict_track.keys()):
             if old_key.find('train') == -1:
@@ -846,7 +866,7 @@ class TrackNet6D(LightningModule):
         return {**avg_dict, 'log': avg_dict}
 
     def test_epoch_end(self, outputs):
-        self.visu_forward = False
+        self.counter_images_logged = 0  # reset image log counter
         avg_dict = {}
         # only keys that are logged in tensorboard are removed from log_scalars !
         for old_key in list(self._dict_track.keys()):
@@ -864,7 +884,6 @@ class TrackNet6D(LightningModule):
 
             self._dict_track.pop(old_key, None)
 
-        self.counter_images_logged = 0  # reset image log counter
         avg_test_dis_float = float(avg_dict['avg_test_loss  [+inf - 0]'])
 
         df1 = dict_to_df(avg_dict)
@@ -908,6 +927,7 @@ class TrackNet6D(LightningModule):
 
         t = pred_t.detach().cpu().numpy()
         r = pred_r.detach().cpu().numpy()
+
         rot = R.from_quat(re_quat(r, 'wxyz'))
 
         self.visualizer.plot_estimated_pose(tag='pred_%s_obj%d' % (str(unique_desig[0][0]).replace('/', "_"), int(unique_desig[1][0])),
@@ -955,7 +975,7 @@ class TrackNet6D(LightningModule):
             torch.bmm(model_points.unsqueeze(0), base_inital.unsqueeze(0)), pred_t)
         # torch.Size([16, 2000, 3]), torch.Size([16, 4]) , torch.Size([16, 3])
         bb_ls = get_bb_real_target(
-            pred_points, cam.unsqueeze(0), pred_t.unsqueeze(0))
+            pred_points, cam.unsqueeze(0))
 
         for j, b in enumerate(bb_ls):
             if not b.check_min_size():
@@ -1238,6 +1258,7 @@ if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
         trainer = Trainer(gpus=env.get('leonhard', {}).get('max_gpus', -1),
                           num_nodes=1,
+                          precision=16,
                           auto_lr_find=False,
                           accumulate_grad_batches=exp['training']['accumulate_grad_batches'],
                           default_root_dir=model_path,
