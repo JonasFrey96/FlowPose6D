@@ -60,10 +60,10 @@ class YCB(Backend):
 
         if cfg_d['output_cfg'].get('color_jitter_real', {}).get('active', False):
             self._color_jitter_real = transforms.ColorJitter(
-                cfg_d['output_cfg'].get('color_jitter_real', {}).get('cfg', False))
+                **cfg_d['output_cfg'].get('color_jitter_real', {}).get('cfg', False))
         if cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             self._color_jitter_render = transforms.ColorJitter(
-                cfg_d['output_cfg'].get('color_jitter_render', {}).get('cfg', False))
+                **cfg_d['output_cfg'].get('color_jitter_render', {}).get('cfg', False))
         if cfg_d['output_cfg'].get('norm_real', False):
             self._norm_real = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -361,8 +361,8 @@ class YCB(Backend):
         depth_img, label, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
-        n = 30
-        m = 0.01
+        n = 0
+        m = 0.03
         r = R.from_euler('zyx', np.random.normal(
             0, n, (1, 3)), degrees=True)
         a = RearangeQuat(1)

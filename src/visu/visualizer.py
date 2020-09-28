@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy.spatial.transform import Rotation as R
 import copy
 import k3d
@@ -23,6 +23,9 @@ from visu import save_image
 from helper import re_quat
 from helper import BoundingBox
 from matplotlib import cm
+from torchvision import transforms
+import math
+from math import pi
 jet = cm.get_cmap('jet')
 SEG_COLORS = (np.stack([jet(v)
                         for v in np.linspace(0, 1, 22)]) * 255).astype(np.uint8)
@@ -66,6 +69,72 @@ class Visualizer():
 
         if not os.path.exists(self.p_visu):
             os.makedirs(self.p_visu)
+
+    def plot_translations(self,
+                          tag,
+                          epoch,
+                          img,
+                          delta_v,
+                          mask,
+                          store=False,
+                          jupyter=False):
+        """
+        img torch.tensor(h,w,3)
+        delta_v torch.tensor(h,w,2)
+        mask torch.tensor(h,w) BOOL
+        """
+        delta_v = delta_v * \
+            mask.type(torch.float32)[:, :, None].repeat(1, 1, 2)
+        # delta_v '[+down/up-], [+right/left-]'
+
+        def bin_dir_amplitude(delta_v):
+            amp = torch.norm(delta_v, p=2, dim=2)
+            amp = amp / torch.max(amp)  # normalize the amplitude
+            dir_bin = torch.atan2(-delta_v[:, :, 0], delta_v[:, :, 1])
+            nr_bins = 8
+            bin_rad = 2 * pi / nr_bins
+            dir_bin = torch.round(dir_bin / bin_rad) * bin_rad
+            return dir_bin, amp
+
+        rot_bin, amp = bin_dir_amplitude(delta_v)
+        s = 10
+        a = 2 if s > 15 else 1
+        pil_img = Image.fromarray(img.numpy().astype(np.uint8), 'RGB')
+        draw = ImageDraw.Draw(pil_img)
+        txt = f"""Vertical:
+  max = {torch.max(delta_v[:,:,0])}
+  min = {torch.min(delta_v[:,:,0])}
+  mean = {torch.mean(delta_v[:,:,0])}
+Hori:
+  max = {torch.max(delta_v[:,:,1])}
+  min = {torch.min(delta_v[:,:,1])}
+  mean = {torch.mean(delta_v[:,:,1])} \n"""
+        draw.text((10, 60), txt, fill=(255, 255, 255, 255))
+        col = (0, 255, 0)
+        grey = (207, 207, 207)
+        for u in range(int(delta_v.shape[0] / s) - 2):
+            u = int(u * s)
+            for v in range(int(delta_v.shape[1] / s) - 2):
+                v = int(v * s)
+                if mask[u, v] == True:
+                    du = round(math.cos(rot_bin[u, v])) * s / 2 * amp[u, v]
+                    dv = round(math.sin(rot_bin[u, v])) * s / 2 * amp[u, v]
+                    try:
+                        draw.line([(v, u), (v + dv, u + du)],
+                                  fill=col, width=2)
+                        draw.ellipse([(v - a, u - a), (v + a, u + a)],
+                                     outline=grey, fill=grey, width=2)
+                    except:
+                        pass
+        if jupyter:
+            display(pil_img)
+        if store:
+            pil_img.save(self.p_visu + str(epoch) +
+                         '_' + tag + '.png')
+        if self.writer is not None:
+            img_np = np.array(pil_img).astype(np.uint8)
+            self.writer.add_image(
+                tag, img_np, global_step=epoch, dataformats='HWC')
 
     def plot_contour(self,
                      tag,

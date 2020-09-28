@@ -61,6 +61,8 @@ from deep_im import LossAddS
 from rotations import *
 from pixelwise_refiner import PixelwiseRefiner
 
+import torch.autograd.profiler as profiler
+
 
 def get_ref_ite(exp):
     # Hyper parameters that should  be moved to config
@@ -307,9 +309,35 @@ class TrackNet6D(LightningModule):
             # TODO idx is currently unused !!!!
             delta_v, rotations, p_label = self.pixelwise_refiner(
                 data, idx)
+            delta_v[:, :2, :, :] = delta_v[:, :2, :, :] * 500
+            pred_trans, pred_rot_wxyz, pred_points, delta_t = self.forward_pose(delta_v, rotations, pred_trans,
+                                                                                pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
 
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
                 self._k += 1
+
+                mask = gt_label_cropped[0] == (idx[0] + 1)
+
+                print('delta_v_first 5', delta_v[0, :3, :, :][:, mask][:, :5])
+                print('delta_v_last 5', delta_v[0, :3, :, :][:, mask][:, -5:])
+                self.visualizer.plot_translations(
+                    f'votes_image_plane_{self._mode}_nr_{self.counter_images_logged}',
+                    self.current_epoch,
+                    real_img[0].permute(1, 2, 0).cpu(),
+                    delta_v[0, :2, :, :].permute(1, 2, 0).cpu(),
+                    mask=mask.cpu(),
+                    store=True)
+
+                print('delta_t_first 5', delta_t[0, :3, :, :][:, mask][:, :5])
+                print('delta_t_last 5', delta_t[0, :3, :, :][:, mask][:, -5:])
+                self.visualizer.plot_translations(
+                    f'votes_camera_coordinates_R3_{self._mode}_nr_{self.counter_images_logged}',
+                    self.current_epoch,
+                    real_img[0].permute(1, 2, 0).cpu(),
+                    delta_t[0, :2, :, :].permute(1, 2, 0).cpu(),
+                    mask=mask.cpu(),
+                    store=True)
+
                 seg_max = p_label.argmax(dim=1)
                 self.visualizer.plot_segmentation(tag=f'gt_segmentation_cropped_{self._mode}_nr_{self.counter_images_logged}',
                                                   epoch=self.current_epoch,
@@ -344,11 +372,10 @@ class TrackNet6D(LightningModule):
                                                       store=True,
                                                       jupyter=False)
 
-            pred_trans, pred_rot_wxyz, pred_points = self.forward_pose(delta_v, rotations, pred_trans,
-                                                                       pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
-
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
+
+        translation_loss = torch.norm(gt_trans - pred_trans, p=2, dim=1)
 
         # Compute ADD / ADD-S loss
         dis = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
@@ -369,11 +396,14 @@ class TrackNet6D(LightningModule):
 
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_p = self.exp.get('loss', {}).get('weight_pose', 0.5)
-        loss = w_s * focal_loss + w_p * dis
+        w_t = self.exp.get('loss', {}).get('weight_trans', 0.5)
+        loss = w_s * focal_loss + w_p * dis + w_t * translation_loss
 
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())
         log_scalars[f'loss_pose_add'] = float(torch.mean(dis, dim=0).detach())
+        log_scalars[f'loss_translation'] = float(
+            torch.mean(translation_loss, dim=0).detach())
 
         if torch.sum(valid_samples) == 0:
             loss = torch.zeros(
@@ -556,7 +586,15 @@ class TrackNet6D(LightningModule):
         return real_img, render_img, real_d, render_d, gt_label_cropped
 
     def forward_pose(self, delta_v, rotations, pred_trans, pred_rot_wxyz, model_points, cam, idx, gt_label_cropped):
-        bs = model_points.shape[0]
+        bs, _, h, w = delta_v.shape
+        if torch.isinf(delta_v).any():
+            base_new = quat_to_rot(
+                pred_rot_wxyz.clone(), 'wxyz', device=self.device).unsqueeze(1)
+            base_new = base_new.view(-1, 3, 3).permute(0, 2, 1)
+            pred_points = torch.add(
+                torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
+            return pred_trans, pred_rot_wxyz, pred_points, torch.zeros(delta_v.shape, device=self.device)
+
         idx_v = torch.abs(delta_v[:, :2]) > 100
         while idx_v.any():
             idx_v = torch.abs(delta_v[:, :2]) > 100
@@ -569,37 +607,61 @@ class TrackNet6D(LightningModule):
 
         # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
         # 1. Update translation prediction
-        s = delta_v.shape
-        delta_v2 = delta_v.contiguous().view(-1, 3).contiguous()
-        pred_trans_batch = pred_trans.unsqueeze(2).unsqueeze(2).repeat(
-            1, 1, s[2], s[3]).contiguous().view(-1, 3).contiguous()
-        cam_batch = cam.unsqueeze(2).unsqueeze(2).repeat(
-            1, 1, s[2], s[3]).contiguous().view(-1, 4).contiguous()
+        # delta_v2 = delta_v.permute(1, 0, 2, 3).reshape(3, -1).T
+
+        # pred_trans_batch = pred_trans[:, :, None, None].repeat(
+        #     1, 1, h, w).permute(1, 0, 2, 3).reshape(3, -1).T
+
+        cam_batch = cam[:, :, None, None].repeat(
+            1, 1, h, w).permute(1, 0, 2, 3).reshape(4, -1)
         # image coordinates to euclidean distance
         pred_trans_new = get_delta_t_in_euclidean(
-            delta_v2, t_src=pred_trans_batch,
-            fx=cam_batch[:, 2].unsqueeze(1), fy=cam_batch[:, 3].unsqueeze(1), device=self.device)
-        delta_t = pred_trans_new - pred_trans_batch
-        delta_t = delta_t.contiguous().view(s)
+            delta_v.permute(1, 0, 2, 3).reshape(3, -1).T,
+            t_src=pred_trans[:, :, None, None].repeat(
+                1, 1, h, w).permute(1, 0, 2, 3).reshape(3, -1).T,
+            fx=cam[:, :, None, None].repeat(1, 1, h, w).permute(
+                1, 0, 2, 3).reshape(4, -1)[2, :][:, None],
+            fy=cam[:, :, None, None].repeat(1, 1, h, w).permute(
+                1, 0, 2, 3).reshape(4, -1)[3, :][:, None],
+            device=self.device)
+
+        delta_t = pred_trans_new - pred_trans[:, :, None, None].repeat(
+            1, 1, h, w).permute(1, 0, 2, 3).reshape(3, -1).T
+        delta_t = delta_t.T.reshape(3, bs, h, w).permute(1, 0, 2, 3)
+
+        pred_trans_new = pred_trans_new.T.reshape(
+            3, bs, h, w).permute(1, 0, 2, 3)
         # delta_t can be used for bookkeeping to keep track of the translation
         # limit delta_t to be within 10cm
         # val = self.exp.get('training', {}).get(
         #     'clamp_delta_t_pred', 0.1)
         # delta_t_clamp = torch.clamp(delta_t, -val, val)
-        pred_trans_batch = pred_trans_batch.view(
-            s) + delta_t
+        # pred_trans_batch = pred_trans_batch.view(
+        #     delta_v.shape) + delta_t
+
+        # _h, _w, _b = [0, 10, 15, 50], [0, 100, 200, 240], [0, 0, 1, 1]
+        # for i in range(0, len(_h)):
+        #     res = get_delta_t_in_euclidean(
+        #         delta_v[_b[i], :, _h[i], _w[i]
+        #                 ][None], t_src=pred_trans[_b[i], :][None],
+        #         fx=cam[_b[i], 2].view(1, 1), fy=cam[_b[i], 3].view(1, 1), device=self.device)
+
+        #     print('RESULT', res, 'Pre Compute',
+        #           pred_trans_new[_b[i], :, _h[i], _w[i]])
 
         # calculate based on predicted semantic segmentation the pred_trans_mean
-        true_res = idx.unsqueeze(2).unsqueeze(3).repeat(
-            1, 1, s[2], s[3])
-        object_cor = gt_label_cropped == idx.unsqueeze(2).repeat(
-            1, s[2], s[3])
+        true_res = idx[:, :, None, None].repeat(1, 1, h, w) + 1
+        object_cor = gt_label_cropped == idx[:, :, None].repeat(1, h, w)
+
         valid_sum = torch.sum(object_cor.view(bs, -1), dim=1)
         valid_sum = torch.clamp(valid_sum, 1, 10.0e6)
-        pred_trans_batch_valid = object_cor.unsqueeze(1).repeat(
-            1, 3, 1, 1) * pred_trans_batch
+        if (valid_sum == torch.ones(valid_sum.shape, device=self.device)).type(torch.uint8).any():
+            logging.warning('Valid sum is 1')
+
+        pred_trans_batch_valid = object_cor[:, None, :, :].repeat(
+            1, 3, 1, 1) * pred_trans_new
         pred_trans_mean = torch.sum(
-            pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
+            pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum[:, None].repeat(1, 3)
         pred_trans = pred_trans_mean
 
         # 2. Update rotation
@@ -621,7 +683,7 @@ class TrackNet6D(LightningModule):
         pred_points = torch.add(
             torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
 
-        return pred_trans, pred_rot_wxyz, pred_points
+        return pred_trans, pred_rot_wxyz, pred_points, delta_t
 
     def forward_pose_simple(self, delta_v, rotations, pred_trans, pred_rot_wxyz, model_points, cam, idx, gt_label_cropped):
         bs = model_points.shape[0]
@@ -1247,7 +1309,9 @@ if __name__ == "__main__":
             shutil.rmtree(p)
         except:
             pass
-    timestamp = datetime.datetime.now().replace(microsecond=0).isoformat()
+        timestamp = '_'
+    else:
+        timestamp = datetime.datetime.now().replace(microsecond=0).isoformat()
     p = exp['model_path'].split('/')
     p.append(str(timestamp) + '_' + p.pop())
     new_path = '/'.join(p)
@@ -1301,7 +1365,7 @@ if __name__ == "__main__":
     )
     if exp.get('checkpoint_restore', False):
         checkpoint = torch.load(
-            exp['checkpoint_path'], map_location=lambda storage, loc: storage)
+            exp['checkpoint_load'], map_location=lambda storage, loc: storage)
         model.load_state_dict(checkpoint['state_dict'])
 
     with torch.autograd.set_detect_anomaly(True):
@@ -1315,14 +1379,17 @@ if __name__ == "__main__":
                           early_stop_callback=early_stop_callback,
                           fast_dev_run=False,
                           limit_train_batches=exp['training'].get(
-            'limit_train_batches', 5000),
-            limit_val_batches=exp['training'].get(
-            'limit_val_batches', 500),
-            limit_test_batches=100,
-            val_check_interval=1.0,
-            progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
-            max_epochs=exp['training']['max_epochs'],
-            terminate_on_nan=False)
+                          'limit_train_batches', 5000),
+                          limit_val_batches=exp['training'].get(
+                          'limit_val_batches', 500),
+                          limit_test_batches=exp['training'].get(
+                          'limit_test_batches', 500),
+                          val_check_interval=1.0,
+                          progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
+                          max_epochs=exp['training']['max_epochs'],
+                          terminate_on_nan=False,
+                          profiler=exp['training'].get(
+                          'profiler', False))
 
     if exp.get('model_mode', 'fit') == 'fit':
         # lr_finder = trainer.lr_find(
@@ -1337,6 +1404,46 @@ if __name__ == "__main__":
             command = 'python scripts/evaluation/experiment2df.py %s --write-csv --write-pkl' % (
                 model_path + '/lightning_logs/version_0')
             os.system(command)
+    elif exp.get('model_mode', 'fit') == 'profile':
+
+        trainer.test(model)
+        with profiler.profile(record_shapes=True) as prof:
+            with profiler.record_function("model_inference"):
+                subset_indices = [0]  # select your indices here as a list
+                subset = torch.utils.data.Subset(
+                    model.train_dataloader().dataset, subset_indices)
+                testloader_subset = torch.utils.data.DataLoader(
+                    subset, batch_size=1, num_workers=0, shuffle=False)
+                for inputs in testloader_subset:
+                    for j, t in enumerate(inputs[0]):
+                        try:
+                            inputs[0][j] = inputs[0][j].cuda()
+                        except:
+                            pass
+                    model(inputs[0])
+
+        print(prof.key_averages().table(
+            sort_by="cpu_time_total", row_limit=10))
+        print(prof.key_averages(group_by_input_shape=True).table(
+            sort_by="cpu_time_total", row_limit=10))
+        with profiler.profile(profile_memory=True, record_shapes=True) as prof:
+            # select your indices here as a list
+            subset_indices = [0]
+            subset = torch.utils.data.Subset(
+                model.train_dataloader().dataset, subset_indices)
+            testloader_subset = torch.utils.data.DataLoader(
+                subset, batch_size=1, num_workers=0, shuffle=False)
+            for inputs in testloader_subset:
+                for j, t in enumerate(inputs[0]):
+                    try:
+                        inputs[0][j] = inputs[0][j].cuda()
+                    except:
+                        pass
+                model(inputs[0])
+                print('START')
+        print(prof.key_averages().table(
+            sort_by="self_cpu_memory_usage", row_limit=10))
+
     else:
         print("Wrong model_mode defined in exp config")
         raise Exception

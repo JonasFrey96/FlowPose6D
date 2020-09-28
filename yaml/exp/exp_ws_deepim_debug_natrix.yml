@@ -1,12 +1,12 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_4_samples/_" #debug
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_4_batches_move/_" #debug
 estimator_restore: true
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
 refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
 restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
-checkpoint_restore: False
-checkpoint_load: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/learn_segmentation/2020-09-09T06:30:19__/epoch=21-avg_val_dis_float=0.1178.ckpt"
+checkpoint_restore: True
+checkpoint_load: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_4_batches_move/2020-09-27T17:16:18__/epoch=18-avg_val_dis_float=9.2654.ckpt"
 mail: false
 model_mode: fit
 
@@ -32,7 +32,8 @@ model:
 
 loss:
   weight_semantic_segmentation: 1
-  weight_pose: 100
+  weight_pose: 10
+  weight_trans: 100
 
 epochs: 500
 lr: 1.0e-4
@@ -56,11 +57,13 @@ training:
   progress_bar_refresh_rate: 1
   refine_iterations: 1
   refine_iterations_range: 0 # iteareatioons elemen refine_iterations +- refine_iterations_range
-  max_epochs: 1000
+  max_epochs: 100
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
   limit_train_batches: 500
-  limit_val_batches: 5
+  limit_val_batches: 1
+  limit_test_batches: 1
+  profiler: False
 
 visu:
   number_images_log_train: 1
@@ -117,17 +120,17 @@ d_test:
     add_depth_image: true
     add_mask_image: true
 
-    norm_render: true
+    norm_render: false
     color_jitter_render:
-      active: true
+      active: false
       cfg:
         - 0.2
         - 0.2
         - 0.2
         - 0.05
-    norm_real: true
+    norm_real: false
     color_jitter_real:
-      active: true
+      active: false
       cfg:
         - 0.2
         - 0.2
@@ -172,17 +175,17 @@ d_train:
     add_depth_image: true
     add_mask_image: true
 
-    norm_render: true
+    norm_render: false
     color_jitter_render:
-      active: true
+      active: false
       cfg:
         - 0.2
         - 0.2
         - 0.2
         - 0.05
-    norm_real: true
+    norm_real: false
     color_jitter_real:
-      active: true
+      active: false
       cfg:
         - 0.2
         - 0.2

@@ -1,0 +1,1 @@
+cd ~/PLR3 && nohup /home/jonfrey/miniconda3/envs/track_latest/bin/python tools/lightning_DeepIM.py &
