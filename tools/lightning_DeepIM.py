@@ -259,12 +259,6 @@ class TrackNet6D(LightningModule):
             print('Logging to File')
 
     def forward(self, batch):
-        # for i in range(len(batch)):
-        #     try:
-        #         batch[i].to(self.device, non_blocking=True)
-        #     except:
-        #         pass
-
         st = time.time()
         if self.visualizer is None:
             self.visualizer = Visualizer(self.exp['model_path'] +
@@ -309,9 +303,10 @@ class TrackNet6D(LightningModule):
             # TODO idx is currently unused !!!!
             delta_v, rotations, p_label = self.pixelwise_refiner(
                 data, idx)
-            delta_v[:, :2, :, :] = delta_v[:, :2, :, :] * 500
-            pred_trans, pred_rot_wxyz, pred_points, delta_t = self.forward_pose(delta_v, rotations, pred_trans,
-                                                                                pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
+            # delta_v = torch.zeros( delta_v.shape, device=self.device)
+
+            pred_trans, pred_rot_wxyz, pred_points, delta_t = self.forward_pose_simple(delta_v, rotations, pred_trans,
+                                                                                       pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
 
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
                 self._k += 1
@@ -344,33 +339,42 @@ class TrackNet6D(LightningModule):
                                                   label=gt_label_cropped[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                try:
-                    self.visualizer.plot_segmentation(tag=f'gt_segmentation_{self._mode}_nr_{self.counter_images_logged}',
-                                                      epoch=self.current_epoch,
-                                                      label=label[0].cpu(
-                                                      ).numpy(),
-                                                      store=True)
-                except:
-                    pass
+                # try:
+                #     self.visualizer.plot_segmentation(tag=f'gt_segmentation_{self._mode}_nr_{self.counter_images_logged}',
+                #                                       epoch=self.current_epoch,
+                #                                       label=label[0].cpu(
+                #                                       ).numpy(),
+                #                                       store=True)
+                # except:
+                #     pass
                 self.visualizer.plot_segmentation(tag=f'predicted_segmentation_{self._mode}_nr_{self.counter_images_logged}',
                                                   epoch=self.current_epoch,
                                                   label=seg_max[0].cpu(
                                                   ).numpy(),
                                                   store=True)
-                self.visualizer.visu_network_input(tag=f'network_input_{self._mode}_nr_{self.counter_images_logged}',
-                                                   epoch=self.current_epoch,
-                                                   data=data,
-                                                   max_images=10,
-                                                   store=True,
-                                                   jupyter=False)
-                self.visualizer.plot_batch_projection(tag=f'batch_projection_{self._mode}_nr_{self.counter_images_logged}',
-                                                      epoch=self.current_epoch,
-                                                      images=img_orig,
-                                                      target=pred_points,
-                                                      cam=cam,
-                                                      max_images=10,
-                                                      store=True,
-                                                      jupyter=False)
+                # self.visualizer.visu_network_input(tag=f'network_input_{self._mode}_nr_{self.counter_images_logged}',
+                #                                    epoch=self.current_epoch,
+                #                                    data=data,
+                #                                    max_images=10,
+                #                                    store=True,
+                #                                    jupyter=False)
+                self.visualizer.visu_network_input_pred(tag=f'network_input_{self._mode}_nr_{self.counter_images_logged}',
+                                                        epoch=self.current_epoch,
+                                                        data=data,
+                                                        images=img_orig,
+                                                        target=pred_points,
+                                                        cam=cam,
+                                                        max_images=10,
+                                                        store=True,
+                                                        jupyter=False)
+                # self.visualizer.plot_batch_projection(tag=f'batch_projection_{self._mode}_nr_{self.counter_images_logged}',
+                #                                       epoch=self.current_epoch,
+                #                                       images=img_orig,
+                #                                       target=pred_points,
+                #                                       cam=cam,
+                #                                       max_images=10,
+                #                                       store=True,
+                #                                       jupyter=False)
 
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
@@ -587,6 +591,8 @@ class TrackNet6D(LightningModule):
 
     def forward_pose(self, delta_v, rotations, pred_trans, pred_rot_wxyz, model_points, cam, idx, gt_label_cropped):
         bs, _, h, w = delta_v.shape
+        delta_v[:, :2, :, :] = delta_v[:, :2, :, :] * 100
+
         if torch.isinf(delta_v).any():
             base_new = quat_to_rot(
                 pred_rot_wxyz.clone(), 'wxyz', device=self.device).unsqueeze(1)
@@ -686,41 +692,19 @@ class TrackNet6D(LightningModule):
         return pred_trans, pred_rot_wxyz, pred_points, delta_t
 
     def forward_pose_simple(self, delta_v, rotations, pred_trans, pred_rot_wxyz, model_points, cam, idx, gt_label_cropped):
+        # Update translation
         bs = model_points.shape[0]
-        idx_v = torch.abs(delta_v[:, :]) > 0.25
-        while idx_v.any():
-            idx_v = torch.abs(delta_v[:, :]) > 0.25
-            delta_v[:, :][idx_v] = delta_v[:, :][idx_v] * 0.5
 
-        # idx_z = torch.abs(delta_v[:, 2]) > 0.2
-        # while idx_z.any():
-        #     idx_z = torch.abs(delta_v[:, 2]) > 0.2
-        #     delta_v[:, 2][idx_z] = delta_v[:, 2][idx_z] * 0.5
-
-        # TODO current bug useing ground truth semantic segmenation. Maybe use the predicted semantic segmenation. Only use the predicted semnatic segmentaion for testing when it got percie good.
-        # 1. Update translation prediction
-        s = delta_v.shape
-        object_cor = gt_label_cropped == idx.unsqueeze(2).repeat(
-            1, s[2], s[3])
-
-        valid_sum = torch.sum(object_cor.view(bs, -1), dim=1)
-        valid_sum = torch.clamp(valid_sum, 1, 10.0e6)
-        pred_trans_batch_valid = object_cor.unsqueeze(1).repeat(
-            1, 3, 1, 1) * delta_v
-        pred_trans_mean = torch.sum(
-            pred_trans_batch_valid.view(bs, 3, -1), dim=2) / valid_sum.unsqueeze(1).repeat(1, 3)
+        pred_trans_mean = torch.mean(delta_v, dim=(2, 3))
+        pred_trans_mean = pred_trans_mean * 0.05
         pred_trans = pred_trans + pred_trans_mean
 
         # 2. Update rotation
-        # Quaternion averageing base on http://www.acsu.buffalo.edu/~johnc/ave_quat07.pdf
-        # https://github.com/christophhagen/averaging-quaternions
-        # We expect similar orientation of the quaternions therfore mean averaging and then normalization !
         identity = torch.zeros(rotations.shape, device=self.device)
         identity[:, 0, :, :] = 1
-        rotations_valid = (rotations + identity) * \
-            object_cor[:, None, :, :].repeat(1, 4, 1, 1).type(torch.float32)
-        rotations_mean = torch.sum(rotations_valid, dim=(
-            2, 3)) / torch.sum(object_cor, dim=(1, 2))[:, None].repeat(1, 4)
+        rotations_valid = rotations + identity
+
+        rotations_mean = torch.mean(rotations_valid, dim=(2, 3))
         pred_rot_wxyz = compose_quat(pred_rot_wxyz, rotations_mean)
 
         # 3. Update pred_points
@@ -730,7 +714,7 @@ class TrackNet6D(LightningModule):
         pred_points = torch.add(
             torch.bmm(model_points, base_new), pred_trans.unsqueeze(1))
 
-        return pred_trans, pred_rot_wxyz, pred_points
+        return pred_trans, pred_rot_wxyz, pred_points, delta_v
 
     def training_step(self, batch, batch_idx):
         self._mode = 'train'
@@ -771,7 +755,7 @@ class TrackNet6D(LightningModule):
 
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
         # 'dis': total_dis, 'log': tensorboard_logs,
-        return {'loss': loss, 'log': tensorboard_logs, 'progress_bar': {'loss_segmentation': log_scalars['loss_segmentation'], 'loss_pose_add': log_scalars['loss_pose_add']}}
+        return {'loss': loss, 'log': tensorboard_logs, 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Add': log_scalars['loss_pose_add'], 'L_Tra': log_scalars[f'loss_translation']}}
 
     def validation_step(self, batch, batch_idx):
         self._mode = 'val'
@@ -1369,47 +1353,50 @@ if __name__ == "__main__":
         model.load_state_dict(checkpoint['state_dict'])
 
     with torch.autograd.set_detect_anomaly(True):
-        trainer = Trainer(gpus=env.get('leonhard', {}).get('max_gpus', -1),
-                          num_nodes=1,
-                          precision=16,
-                          auto_lr_find=False,
-                          accumulate_grad_batches=exp['training']['accumulate_grad_batches'],
-                          default_root_dir=model_path,
-                          checkpoint_callback=checkpoint_callback,
-                          early_stop_callback=early_stop_callback,
-                          fast_dev_run=False,
-                          limit_train_batches=exp['training'].get(
-                          'limit_train_batches', 5000),
-                          limit_val_batches=exp['training'].get(
-                          'limit_val_batches', 500),
-                          limit_test_batches=exp['training'].get(
-                          'limit_test_batches', 500),
-                          val_check_interval=1.0,
-                          progress_bar_refresh_rate=exp['training']['accumulate_grad_batches'],
-                          max_epochs=exp['training']['max_epochs'],
-                          terminate_on_nan=False,
-                          profiler=exp['training'].get(
-                          'profiler', False))
+        trainer = Trainer(**exp['trainer'],
+        callbacks=[checkpoint_callback],
+        early_stop_callback=early_stop_callback,
+        default_root_dir=exp['model_path'])
 
-    if exp.get('model_mode', 'fit') == 'fit':
-        # lr_finder = trainer.lr_find(
-        #     model, min_lr=0.0000001, max_lr=0.001, num_training=500, early_stop_threshold=100)
-        # Results can be found in
-        # lr_finder.results
-        # lr_finder.suggestion()
-        trainer.fit(model)
-    elif exp.get('model_mode', 'fit') == 'test':
-        trainer.test(model)
-        if exp.get('conv_test2df', False):
-            command = 'python scripts/evaluation/experiment2df.py %s --write-csv --write-pkl' % (
-                model_path + '/lightning_logs/version_0')
-            os.system(command)
-    elif exp.get('model_mode', 'fit') == 'profile':
 
-        trainer.test(model)
-        with profiler.profile(record_shapes=True) as prof:
-            with profiler.record_function("model_inference"):
-                subset_indices = [0]  # select your indices here as a list
+        if exp.get('model_mode', 'fit') == 'fit':
+            # lr_finder = trainer.lr_find(
+            #     model, min_lr=0.0000001, max_lr=0.001, num_training=500, early_stop_threshold=100)
+            # Results can be found in
+            # lr_finder.results
+            # lr_finder.suggestion()
+            trainer.fit(model)
+        elif exp.get('model_mode', 'fit') == 'test':
+            trainer.test(model)
+            if exp.get('conv_test2df', False):
+                command = 'python scripts/evaluation/experiment2df.py %s --write-csv --write-pkl' % (
+                    model_path + '/lightning_logs/version_0')
+                os.system(command)
+        elif exp.get('model_mode', 'fit') == 'profile':
+
+            trainer.test(model)
+            with profiler.profile(record_shapes=True) as prof:
+                with profiler.record_function("model_inference"):
+                    subset_indices = [0]  # select your indices here as a list
+                    subset = torch.utils.data.Subset(
+                        model.train_dataloader().dataset, subset_indices)
+                    testloader_subset = torch.utils.data.DataLoader(
+                        subset, batch_size=1, num_workers=0, shuffle=False)
+                    for inputs in testloader_subset:
+                        for j, t in enumerate(inputs[0]):
+                            try:
+                                inputs[0][j] = inputs[0][j].cuda()
+                            except:
+                                pass
+                        model(inputs[0])
+
+            print(prof.key_averages().table(
+                sort_by="cpu_time_total", row_limit=10))
+            print(prof.key_averages(group_by_input_shape=True).table(
+                sort_by="cpu_time_total", row_limit=10))
+            with profiler.profile(profile_memory=True, record_shapes=True) as prof:
+                # select your indices here as a list
+                subset_indices = [0]
                 subset = torch.utils.data.Subset(
                     model.train_dataloader().dataset, subset_indices)
                 testloader_subset = torch.utils.data.DataLoader(
@@ -1421,29 +1408,10 @@ if __name__ == "__main__":
                         except:
                             pass
                     model(inputs[0])
+                    print('START')
+            print(prof.key_averages().table(
+                sort_by="self_cpu_memory_usage", row_limit=10))
 
-        print(prof.key_averages().table(
-            sort_by="cpu_time_total", row_limit=10))
-        print(prof.key_averages(group_by_input_shape=True).table(
-            sort_by="cpu_time_total", row_limit=10))
-        with profiler.profile(profile_memory=True, record_shapes=True) as prof:
-            # select your indices here as a list
-            subset_indices = [0]
-            subset = torch.utils.data.Subset(
-                model.train_dataloader().dataset, subset_indices)
-            testloader_subset = torch.utils.data.DataLoader(
-                subset, batch_size=1, num_workers=0, shuffle=False)
-            for inputs in testloader_subset:
-                for j, t in enumerate(inputs[0]):
-                    try:
-                        inputs[0][j] = inputs[0][j].cuda()
-                    except:
-                        pass
-                model(inputs[0])
-                print('START')
-        print(prof.key_averages().table(
-            sort_by="self_cpu_memory_usage", row_limit=10))
-
-    else:
-        print("Wrong model_mode defined in exp config")
-        raise Exception
+        else:
+            print("Wrong model_mode defined in exp config")
+            raise Exception

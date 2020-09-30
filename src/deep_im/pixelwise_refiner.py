@@ -56,6 +56,42 @@ class PredictionHead(nn.Module):
         return t, r
 
 
+class PredictionHeadConv(nn.Module):
+
+    def __init__(self, num_obj, in_features=128):
+        super(PredictionHeadConv, self).__init__()
+        self.num_obj = num_obj
+        self.fc1 = nn.Sequential(
+            nn.Conv1d(in_channels=in_features, out_channels=64,
+                      kernel_size=1, bias=True),
+            nn.LeakyReLU(0.1, inplace=True))
+
+        self.fc2 = nn.Sequential(
+            nn.Conv1d(in_channels=64, out_channels=64,
+                      kernel_size=1, bias=True),
+            nn.LeakyReLU(0.1, inplace=True))
+
+        self.fc_trans = nn.Conv1d(in_channels=64, out_channels=3 * num_obj,
+                                  kernel_size=1, bias=True)
+        self.fc_rot = nn.Conv1d(in_channels=64, out_channels=4 * num_obj,
+                                kernel_size=1, bias=True)
+
+    def forward(self, x, obj):
+        bs, feat, h, w = x.shape
+        x = x.view(bs, feat, -1)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        t = self.fc_trans(x).view(bs, 3 * self.num_obj, h,
+                                  w).view(bs, self.num_obj, 3, h, w)
+        r = self.fc_rot(x).view(bs, 4 * self.num_obj, h,
+                                w).view(bs, self.num_obj, 4, h, w)
+        store_t = t.clone()
+        t = batched_index_select(t=t, inds=obj, dim=1).squeeze(1)
+        r = batched_index_select(t=r, inds=obj, dim=1).squeeze(1)
+
+        return t, r
+
+
 def pointwise_conv(in_features, maps, out_features):
     layers = []
     previous = in_features
@@ -117,6 +153,94 @@ class Upsample(nn.Sequential):
         self.add_module('act', nn.ReLU(True))
 
 
+class FeatureExtractor(nn.Module):
+    def __init__(self, input_channels=3, out_feat=64):
+        super().__init__()
+        growth_rate = 16
+        self.features = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=7,
+                      padding=3, stride=2, bias=True),
+            nn.ELU(True))
+        features1 = 64
+        self.conv1 = DenseBlock(features1, layers=4, k=growth_rate)
+        features2 = features1 + 4 * growth_rate
+        self.downsample1 = Downsample(features2)
+        self.conv2 = DenseBlock(features2, layers=5, k=growth_rate)
+        features3 = features2 + 5 * growth_rate
+        self.downsample2 = Downsample(features3)
+        self.conv3 = DenseBlock(features3, layers=7, k=growth_rate)
+        features4 = features3 + 7 * growth_rate
+        self.downsample3 = Downsample(features4)
+        features5 = features4 + 9 * growth_rate
+        self.conv4 = DenseBlock(features4, layers=9, k=growth_rate)
+
+        self.upsample1 = Upsample(features5, 256)
+        features = 256 + features4
+        self.conv5 = DenseBlock(features, layers=7, k=growth_rate)
+        features += 7 * growth_rate
+        self.upsample2 = Upsample(features, 128)
+        features = 128 + features3
+        self.conv6 = DenseBlock(features, layers=5, k=growth_rate)
+        self.upsample3 = Upsample(features + 5 * growth_rate, 64)
+        features = features1 + 64
+        self.conv7 = DenseBlock(features, layers=4, k=growth_rate)
+        features = features + 4 * growth_rate  # 198
+        self.upsample4 = Upsample(features, out_feat)
+
+    def forward(self, data):
+        N, C, H, W = data.shape
+        features = self.features(data)  # 240 x 320 x 64
+        x = self.conv1(features)
+        x = self.downsample1(x)  # 120 x 160
+        x1 = self.conv2(x)
+        x = self.downsample2(x1)  # 60 x 80
+        x2 = self.conv3(x)
+        x = self.downsample3(x2)  # 30 x 40
+        x = self.conv4(x)
+
+        x = self.upsample1(x)  # 60 x 80
+        x = self.conv5(torch.cat([x, x2], dim=1))
+        x = self.upsample2(x)  # 120 x 160
+        x = self.conv6(torch.cat([x, x1], dim=1))
+        x = self.upsample3(x)  # 240 x 320
+        x = self.conv7(torch.cat([x, features], dim=1))  # features dim 64
+        x = self.upsample4(x)
+        return x
+
+
+class PixelwiseRefinerJoint(nn.Module):
+    def __init__(self, input_channels=6, num_classes=22, growth_rate=16):
+        super().__init__()
+
+        out_features = 128
+        self.real_ext = FeatureExtractor(input_channels=3)
+        self.render_ext = FeatureExtractor(input_channels=3)
+
+        self.num_classes = num_classes
+
+        # self.translation_head = pointwise_conv(out_features, [128, 64], 3)
+        # self.rotation_head = pointwise_conv(out_features, [128, 64], 4)
+
+        self.segmentation_head = pointwise_conv(
+            out_features, [128, 64], num_classes)
+        self.head = PredictionHeadConv(num_classes, in_features=128)
+
+    def forward(self, data, idx, label=None):
+        N, C, H, W = data.shape
+
+        x_real = self.real_ext(data[:, :3, :, :])
+        x_render = self.render_ext(data[:, 3:, :, :])
+
+        x = torch.cat([x_real, x_render], dim=1)
+        segmentation = self.segmentation_head(x)
+
+        if label is None:
+            label = segmentation.argmax(dim=1)
+        trans, rotations = self.head(x, idx)
+
+        return trans, rotations, segmentation
+
+
 class PixelwiseRefiner(nn.Module):
     def __init__(self, input_channels=8, num_classes=22, growth_rate=16):
         super().__init__()
@@ -153,6 +277,7 @@ class PixelwiseRefiner(nn.Module):
         out_features = 128
 
         self.num_classes = num_classes
+        self.head = PredictionHeadConv(num_classes, in_features=128)
 
         self.translation_head = pointwise_conv(out_features, [128, 64], 3)
         self.rotation_head = pointwise_conv(out_features, [128, 64], 4)
@@ -183,19 +308,31 @@ class PixelwiseRefiner(nn.Module):
 
         if label is None:
             label = segmentation.argmax(dim=1)
+        trans, rotations = self.head(x, idx)
 
-        trans = self.translation_head(x)
-        rotations = self.rotation_head(x)
+        # trans = self.translation_head(x)
+        # rotations = self.rotation_head(x)
 
         return trans, rotations, segmentation
 
 
-if __name__ == "__main__":
-    c = 8
-    bs = 4
-    model = DeepIM(input_channels=c, num_classes=21, growth_rate=16).cuda()
-    data = torch.ones((bs, c, 480, 640)).cuda()
-    obj = torch.ones((bs, 1), dtype=torch.int64).cuda()
+# if __name__ == "__main__":
+#     c = 6
+#     bs = 2
+#     model = PixelwiseRefiner(input_channels=c, num_classes=21, growth_rate=16)
+#     data = torch.ones((bs, c, 480, 640))
+#     obj = torch.ones((bs, 1), dtype=torch.int64)
+#     obj[0, 0] = 17
+#     out = model(data, obj)
+#     print(out)
 
+
+if __name__ == "__main__":
+    c = 6
+    bs = 4
+    model = PixelwiseRefinerJoint()
+    data = torch.ones((bs, c, 480, 640))
+    obj = torch.ones((bs, 1), dtype=torch.int64)
+    obj[0, 0] = 17
     out = model(data, obj)
-    print(out)
+    print(out[0].shape, out[1].shape, out[2].shape)

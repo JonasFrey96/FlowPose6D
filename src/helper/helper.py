@@ -41,6 +41,9 @@ def batched_index_select(t, inds, dim=1):
     elif len(t.shape) == 4:
         dummy = inds.unsqueeze(2).unsqueeze(3).expand(
             inds.size(0), inds.size(1), t.size(2), t.size(3))
+    elif len(t.shape) == 5:
+        dummy = inds[:, :, None, None, None].expand(
+            inds.size(0), inds.size(1), t.size(2), t.size(3), t.size(4))
     out = t.gather(dim, dummy)  # b x e x f
     return out
 

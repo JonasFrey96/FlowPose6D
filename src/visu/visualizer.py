@@ -90,25 +90,26 @@ class Visualizer():
         def bin_dir_amplitude(delta_v):
             amp = torch.norm(delta_v, p=2, dim=2)
             amp = amp / torch.max(amp)  # normalize the amplitude
-            dir_bin = torch.atan2(-delta_v[:, :, 0], delta_v[:, :, 1])
+            dir_bin = torch.atan2(delta_v[:, :, 0], delta_v[:, :, 1])
             nr_bins = 8
             bin_rad = 2 * pi / nr_bins
             dir_bin = torch.round(dir_bin / bin_rad) * bin_rad
             return dir_bin, amp
 
         rot_bin, amp = bin_dir_amplitude(delta_v)
-        s = 10
+        s = 20
         a = 2 if s > 15 else 1
         pil_img = Image.fromarray(img.numpy().astype(np.uint8), 'RGB')
         draw = ImageDraw.Draw(pil_img)
-        txt = f"""Vertical:
-  max = {torch.max(delta_v[:,:,0])}
-  min = {torch.min(delta_v[:,:,0])}
-  mean = {torch.mean(delta_v[:,:,0])}
-Hori:
-  max = {torch.max(delta_v[:,:,1])}
-  min = {torch.min(delta_v[:,:,1])}
-  mean = {torch.mean(delta_v[:,:,1])} \n"""
+        txt = f"""Horizontal, pos right | neg left:
+  max = {torch.max(delta_v[mask][:,0])}
+  min = {torch.min(delta_v[mask][:,0])}
+  mean = {torch.mean(delta_v[mask][:,0])}
+Vertical, pos down | neg up:
+  max = {torch.max(delta_v[mask][:,1])}
+  min = {torch.min(delta_v[mask][:,1])}
+  mean = {torch.mean(delta_v[mask][:,1])} 
+\n"""
         draw.text((10, 60), txt, fill=(255, 255, 255, 255))
         col = (0, 255, 0)
         grey = (207, 207, 207)
@@ -402,6 +403,66 @@ Hori:
             #store_ar = (img_d* 255).round().astype(np.uint8)
             plt.savefig(
                 f'{self.p_visu}/{str(epoch)}_{tag}_network_input.png', dpi=300)
+            #save_image(img_d, tag=str(epoch) + tag, p_store=self.p_visu)
+        if jupyter:
+            plt.show()
+        if self.writer is not None:
+            # you can get a high-resolution image as numpy array!!
+            plot_img_np = get_img_from_fig(fig)
+            self.writer.add_image(
+                tag, plot_img_np, global_step=epoch, dataformats='HWC')
+        plt.close()
+
+    def visu_network_input_pred(self, tag, epoch, data, images, target, cam, max_images=10, store=False, jupyter=False):
+        num = min(max_images, data.shape[0])
+        fig = plt.figure(figsize=(10.5, num * 3.5))
+
+        for i in range(num):
+            # real render input
+            n_render = f'batch{i}_render.png'
+            n_real = f'batch{i}_real.png'
+            real = np.transpose(
+                data[i, :3, :, :].cpu().numpy().astype(np.uint8), (1, 2, 0))
+            render = np.transpose(
+                data[i, 3:, :, :].cpu().numpy().astype(np.uint8), (1, 2, 0))
+            fig.add_subplot(num, 3, i * 3 + 1)
+            plt.imshow(real)
+            plt.tight_layout()
+            fig.add_subplot(num, 3, i * 3 + 2)
+            plt.imshow(render)
+            plt.tight_layout()
+
+            # prediction
+            masked_idx = backproject_points(
+                target[i], fx=cam[i, 2], fy=cam[i, 3], cx=cam[i, 0], cy=cam[i, 1])
+            for j in range(masked_idx.shape[0]):
+                try:
+                    images[i, int(masked_idx[j, 0]), int(
+                        masked_idx[j, 1]), 0] = 0
+                    images[i, int(masked_idx[j, 0]), int(
+                        masked_idx[j, 1]), 1] = 255
+                    images[i, int(masked_idx[j, 0]), int(
+                        masked_idx[j, 1]), 2] = 0
+                except:
+                    pass
+            min1 = torch.min(masked_idx[:, 0])
+            max1 = torch.max(masked_idx[:, 0])
+            max2 = torch.max(masked_idx[:, 1])
+            min2 = torch.min(masked_idx[:, 1])
+            bb = BoundingBox(p1=torch.stack(
+                [min1, min2]), p2=torch.stack([max1, max2]))
+            bb_img = bb.plot(
+                images[i, :, :, :3].cpu().numpy().astype(np.uint8))
+            fig.add_subplot(num, 3, i * 3 + 3)
+            plt.imshow(bb_img)
+            # fig.add_subplot(num, 2, i * 2 + 4)
+            # real = images[i, :, :, :3].cpu().numpy().astype(np.uint8)
+            # plt.imshow(real)
+
+        if store:
+            #store_ar = (img_d* 255).round().astype(np.uint8)
+            plt.savefig(
+                f'{self.p_visu}/{str(epoch)}_{tag}_network_input_and_prediction.png', dpi=300)
             #save_image(img_d, tag=str(epoch) + tag, p_store=self.p_visu)
         if jupyter:
             plt.show()

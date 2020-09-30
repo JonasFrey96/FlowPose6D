@@ -1,11 +1,11 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_4_batches_move/_" #debug
-estimator_restore: true
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/1batch1sample_only_trans/_" #overfit_1_batch_bs_1
+estimator_restore: false
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
 refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
 restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
-checkpoint_restore: True
+checkpoint_restore: false
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_4_batches_move/2020-09-27T17:16:18__/epoch=18-avg_val_dis_float=9.2654.ckpt"
 mail: false
 model_mode: fit
@@ -31,12 +31,12 @@ model:
   sem_seg: True
 
 loss:
-  weight_semantic_segmentation: 1
-  weight_pose: 10
-  weight_trans: 100
+  weight_semantic_segmentation: 0
+  weight_pose: 0
+  weight_trans: 1
 
 epochs: 500
-lr: 1.0e-4
+lr: 1.0e-6
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -52,18 +52,26 @@ vm:
 eval:
   threshold_add: 0.02
 
-training:
-  accumulate_grad_batches: 1
+trainer:
+  num_nodes: 1
+  precision: 32
+  auto_lr_find: false
+  accumulate_grad_batches: 16
+  fast_dev_run: false
+  limit_train_batches: 1000
+  limit_val_batches: 5
+  limit_test_batches: 5
   progress_bar_refresh_rate: 1
+  max_epochs: 100
+  terminate_on_nan: false
+  profiler: false
+  gpus: -1
+
+training:
   refine_iterations: 1
   refine_iterations_range: 0 # iteareatioons elemen refine_iterations +- refine_iterations_range
-  max_epochs: 100
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 500
-  limit_val_batches: 1
-  limit_test_batches: 1
-  profiler: False
 
 visu:
   number_images_log_train: 1
@@ -75,14 +83,8 @@ visu:
 early_stopping_cfg:
   patience: 100
 
-decay_margin_start: 0.016
-samples_early_break_epoch: 5000000
-time_early_break_epoch: 10
-samples_early_break_validation: 100000
-time_early_break_validation: 10
-
 loader:
-  batch_size: 4
+  batch_size: 2
   num_workers: 4
   shuffle: True
   pin_memory: True
@@ -111,7 +113,7 @@ d_test:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: 4
+    overfitting_nr_idx: 1
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -119,7 +121,6 @@ d_test:
     refine: false
     add_depth_image: true
     add_mask_image: true
-
     norm_render: false
     color_jitter_render:
       active: false
@@ -136,7 +137,6 @@ d_test:
         - 0.2
         - 0.2
         - 0.05
-
     visu:
       status: true
       return_img: true
@@ -166,7 +166,7 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
-    overfitting_nr_idx: 4
+    overfitting_nr_idx: 1
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -191,7 +191,6 @@ d_train:
         - 0.2
         - 0.2
         - 0.05
-
     visu:
       status: true
       return_img: true
