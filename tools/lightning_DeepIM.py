@@ -271,6 +271,10 @@ class TrackNet6D(LightningModule):
         log_scalars = {}
         bs = points.shape[0]
 
+
+
+
+
         if len(batch) > 13:
             # check if skip
             if batch[13] is False:
@@ -284,6 +288,12 @@ class TrackNet6D(LightningModule):
 
             real_img, render_img, real_d, render_d, gt_label_cropped, pred_rot_wxyz, pred_trans, pred_points = batch[
                 13:]
+
+            dis_init = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
+                                    target=target, model_points=model_points, idx=idx)
+            log_scalars[f'loss_pose_add_init'] = float(
+                torch.mean(dis_init, dim=0).detach())
+                
             refine_iterations = 1
         else:
             pred_rot_wxyz, pred_trans, pred_points = forward_init_data(
@@ -408,6 +418,8 @@ class TrackNet6D(LightningModule):
         log_scalars[f'loss_pose_add'] = float(torch.mean(dis, dim=0).detach())
         log_scalars[f'loss_translation'] = float(
             torch.mean(translation_loss, dim=0).detach())
+        log_scalars[f'loss_pose_add_delta (positiv is good)'] = float(
+            torch.mean(dis_init-dis, dim=0).detach())
 
         if torch.sum(valid_samples) == 0:
             loss = torch.zeros(
@@ -1354,17 +1366,18 @@ if __name__ == "__main__":
 
     with torch.autograd.set_detect_anomaly(True):
         trainer = Trainer(**exp['trainer'],
-        callbacks=[checkpoint_callback],
+        checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stop_callback,
         default_root_dir=exp['model_path'])
 
 
         if exp.get('model_mode', 'fit') == 'fit':
             # lr_finder = trainer.lr_find(
-            #     model, min_lr=0.0000001, max_lr=0.001, num_training=500, early_stop_threshold=100)
-            # Results can be found in
+            #     model, min_lr=0.0000001, max_lr=0.001, num_training=50, early_stop_threshold=100)
             # lr_finder.results
             # lr_finder.suggestion()
+            # print('LR FInder suggestion', lr_finder.suggestion())
+            # print(lr_finder.results)
             trainer.fit(model)
         elif exp.get('model_mode', 'fit') == 'test':
             trainer.test(model)
