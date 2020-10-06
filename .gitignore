@@ -9,7 +9,7 @@ ipython_config.py
 */__pycache__/*
 */.vscode*
 *.code-workspace
-.vscode*
+.vscode/*
 *.swp
 __pycache__/
 experiments/logs*
@@ -23,4 +23,5 @@ lig/knn/*.egg-info
 .vscode/settings.json
 scripts/viewpoint_manager.ipynb
 yaml/auto*
-
+.vscode*
+*/settings.json

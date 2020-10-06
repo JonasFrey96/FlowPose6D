@@ -111,7 +111,7 @@ def get_inital(mode, gt_rot_wxyz, gt_trans, pred_r_current, pred_t_current, cfg=
 
 
 def ret_cropped_image(img):
-    test = torch.nonzero(img[:, :, :])
+    test = img.nonzero(as_tuple=False)
     a = torch.max(test[:, 0]) + 1
     b = torch.max(test[:, 1]) + 1
     c = torch.max(test[:, 2]) + 1
@@ -286,7 +286,7 @@ class TrackNet6D(LightningModule):
                 pred_trans = torch.zeros(gt_trans.shape, device=self.device)
                 return loss, pred_rot_wxyz.detach(), pred_trans.detach(), log_scalars
 
-            real_img, render_img, real_d, render_d, gt_label_cropped, pred_rot_wxyz, pred_trans, pred_points = batch[
+            real_img, render_img, real_d, render_d, gt_label_cropped, pred_rot_wxyz, pred_trans, pred_points, u_map, v_map, x_map, y_map, z_map = batch[
                 13:]
 
             dis_init = self.criterion_adds(pred_r=pred_rot_wxyz, pred_t=pred_trans,
@@ -315,8 +315,8 @@ class TrackNet6D(LightningModule):
                 data, idx)
             # delta_v = torch.zeros( delta_v.shape, device=self.device)
 
-            pred_trans, pred_rot_wxyz, pred_points, delta_t = self.forward_pose_simple(delta_v, rotations, pred_trans,
-                                                                                       pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
+            # pred_trans, pred_rot_wxyz, pred_points, delta_t = self.forward_pose_simple(delta_v, rotations, pred_trans,
+                                                                                    #    pred_rot_wxyz, model_points, cam, idx, gt_label_cropped)
 
             if self.visu_forward and self.exp.get('visu', {}).get('network_input_batch', False):
                 self._k += 1
@@ -388,6 +388,12 @@ class TrackNet6D(LightningModule):
 
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
+
+        ind = (gt_label_cropped == idx+1)[:,:,None].repeat(1,1,1,2)
+        uv_gt = torch.cat( [u_map, v_map], dim=3 )
+        uv_loss = torch.norm( delta_v[ind] - uv_gt[ind], dim=3 )
+
+
 
         translation_loss = torch.norm(gt_trans - pred_trans, p=2, dim=1)
 

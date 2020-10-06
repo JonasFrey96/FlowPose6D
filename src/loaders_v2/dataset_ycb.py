@@ -42,7 +42,10 @@ from deep_im import ViewpointManager
 from helper import get_bb_from_depth, get_bb_real_target, backproject_points
 from rotations import *
 
-
+# for flow
+import trimesh
+from trimesh.ray.ray_pyembree import RayMeshIntersector
+from scipy.interpolate import griddata
 class YCB(Backend):
     def __init__(self, cfg_d, cfg_env):
         super(YCB, self).__init__(cfg_d, cfg_env)
@@ -51,7 +54,8 @@ class YCB(Backend):
         self._p_ycb = cfg_env['p_ycb']
         self._pcd_cad_dict, self._name_to_idx = self.get_pcd_cad_models()
         self._batch_list = self.get_batch_list()
-
+        self.h = 480
+        self.w = 640
         self._length = len(self._batch_list)
         self._norm = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -73,8 +77,8 @@ class YCB(Backend):
 
         self._front_num = 2
         self._minimum_num_pt = 50
-        self._xmap = np.array([[j for i in range(640)] for j in range(480)])
-        self._ymap = np.array([[i for i in range(640)] for j in range(480)])
+        self._xmap = np.array([[j for i in range(self.w)] for j in range(self.h)])
+        self._ymap = np.array([[i for i in range(self.w)] for j in range(self.h)])
 
         if self._cfg_d['output_cfg'].get('vm_in_dataloader', False):
             self._use_vm = True
@@ -96,6 +100,7 @@ class YCB(Backend):
         self.input_grey = torchvision.transforms.RandomGrayscale(
             p=self._cfg_d['noise_cfg'].get('p_grey', 0))
         self._load_background()
+        self.load_flow()
 
     def _load_background(self):
         p = self._cfg_env['p_background']
@@ -347,16 +352,24 @@ class YCB(Backend):
         tup = tup + (gt_rot_wxyz, gt_trans, unique_desig)
 
         if self._use_vm:
-            new_tup = self.get_rendered_data(tup)
+            cam_flag= self.get_camera(desig, K=False, idx=True)
+
+            h_real = np.eye(4)
+            h_real[:3,:3] = target_r
+            h_real[:3,3] = gt_trans
+        
+            new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
             if new_tup is False:
                 return [False]
-
-            n_tup = (tup[0], 0, 0, *tup[3:6], 0, 0, *tup[8:13])
-            n_tup += new_tup
+            # n_tup = (tup[0], 0, 0, *tup[3:6], 0, 0, *tup[8:13])
+            # n_tup += new_tu
+            n_tup = tup + new_tup
             return n_tup
         return tup
 
-    def get_rendered_data(self, batch):
+    def get_rendered_data(self, batch, h_real, obj_idx, label,cam_flag):
+
+
         points, choose, img, target, model_points, idx = batch[0:6]
         depth_img, label, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
@@ -385,6 +398,10 @@ class YCB(Backend):
 
         img_ren, depth, h_render = self._vm.get_closest_image_batch(
             i=idx[None], rot=init_rot_wxyz, conv='wxyz')
+        
+        flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag)
+
+
         bb_lsd = get_bb_from_depth(depth)
         b = bb_lsd[0]
         tl, br = b.limit_bb()
@@ -414,10 +431,14 @@ class YCB(Backend):
         render_d = up(crop_d[None])[0, :, :]
 
         # real data
-        gt_label_cropped = torch.zeros(
-            (h, w), dtype=torch.long)
-        bb_lsd = get_bb_real_target(
-            pred_points, cam[None])
+        u_cropped = torch.zeros((h, w), dtype=torch.long)
+        v_cropped = torch.zeros((h, w), dtype=torch.long)
+        x_cropped = torch.zeros((h, w), dtype=torch.long)
+        y_cropped = torch.zeros((h, w), dtype=torch.long)
+        z_cropped = torch.zeros((h, w), dtype=torch.long) 
+        gt_label_cropped = torch.zeros((h, w), dtype=torch.long)
+        
+        bb_lsd = get_bb_real_target(pred_points, cam[None])
         b = bb_lsd[0]
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
@@ -442,10 +463,21 @@ class YCB(Backend):
         crop_d = torch.transpose(crop_d, 2, 3)
         real_d = up(crop_d)[0]
 
+        
         tmp = torch.transpose(torch.transpose(
             b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
         gt_label_cropped = torch.round(up(tmp.type(
             torch.float32).unsqueeze(0))).clamp(0, 21 - 1)[0][0]
+        def l_to_cropped(l):
+            tmp = b.crop(torch.from_numpy(  l[:,:,None] ))
+            tmp = up(tmp[:,:,0] [None,None,:,:] )
+            return tmp[0,0]
+
+        u_cropped = l_to_cropped(  flow[0] )
+        v_cropped = l_to_cropped(  flow[1] )
+        x_cropped = l_to_cropped(  flow[2] )
+        y_cropped = l_to_cropped(  flow[3] )
+        z_cropped = l_to_cropped(  flow[4] )
 
         if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             render_img = self._color_jitter_render(render_img)
@@ -456,7 +488,7 @@ class YCB(Backend):
         if self._cfg_d['output_cfg'].get('norm_real', False):
             real_img = self._norm_real(real_img)
 
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0])
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0], h_render, img_ren, u_cropped, v_cropped, x_cropped , y_cropped, z_cropped)
 
     def get_desig(self, path):
         desig = []
@@ -614,22 +646,165 @@ class YCB(Backend):
             pickle.dump(batch_ls, open(name, "wb"))
         return batch_ls
 
-    def get_camera(self, desig):
+    def get_camera(self, desig, K=False, idx=False):
         """
         make this here simpler for cameras
         """
+        
         if desig[:8] != 'data_syn' and int(desig[5:9]) >= 60:
             cx_2 = 323.7872
             cy_2 = 279.6921
             fx_2 = 1077.836
             fy_2 = 1078.189
-            return np.array([cx_2, cy_2, fx_2, fy_2])
+            if K :
+                return np.array([[fx_2,0,cx_2],[0,fy_2,cy_2],[0,0,1]])
+            elif idx:
+                return 1
+            else:
+                return np.array([cx_2, cy_2, fx_2, fy_2])
+                
         else:
             cx_1 = 312.9869
             cy_1 = 241.3109
             fx_1 = 1066.778
             fy_1 = 1067.487
-            return np.array([cx_1, cy_1, fx_1, fy_1])
+            if K:
+                return np.array([[fx_1,0,cx_1],[0,fy_1,cy_1],[0,0,1]])
+            elif idx:
+                return 0 
+            else:
+                return np.array([cx_1, cy_1, fx_1, fy_1])
+            
+    def load_flow(self):
+        self.load_rays_dir() 
+        #self.nr_to_image_plane =
+        #self.rays_origin_real = []
+        #self.rays_origin_render = []
+        #self.rays_dir = []
+        self.load_meshes()
+        #self.mesh[ idx ]
+
+        self.max_matches = 500
+        self.max_iterations = 5000
+        self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
+
+    def transform_mesh(self, mesh, H):
+        """ directly operates on mesh and does not create a copy!"""
+        t = np.ones((mesh.vertices.shape[0],4)) 
+        t[:,:3] = mesh.vertices
+        mesh.vertices = (t @ H.T)[:,:3]
+        return mesh
+        
+    def get_flow(self, h_render, h_real, idx, label_img, cam):
+        m_real = copy.deepcopy(self.mesh[idx])
+        m_render = copy.deepcopy(self.mesh[idx])
+        
+        m_real = self.transform_mesh(m_real, h_real)
+        m_render = self.transform_mesh(m_render, h_render)
+
+        from trimesh.ray.ray_pyembree import RayMeshIntersector
+        rmi_real = RayMeshIntersector(m_real)
+        rmi_render = RayMeshIntersector(m_render)
+        render_res = rmi_render.intersects_location(ray_origins=self.rays_origin_render[0], 
+                               ray_directions=self.rays_dir[0],
+                               multiple_hits=False)
+        real_res = rmi_real.intersects_location(ray_origins=self.rays_origin_real[cam], 
+                                    ray_directions=self.rays_dir[cam],
+                                    multiple_hits=False)
+        render_des = np.zeros( (self.h,self.w,4) ) 
+        real_des = np.zeros( (self.h,self.w,4) )
+
+        for i in range(real_res[1].shape[0]):
+            u = int(self.nr_to_image_plane[ real_res[1][i] ][1])
+            v = int(self.nr_to_image_plane[ real_res[1][i] ][0])
+            real_des[u,v,:3] = np.array( real_res[0][i] )
+            real_des[u,v,3] = real_res[2][i]
+        for i in range(render_res[1].shape[0]):
+            u = int(self.nr_to_image_plane[ render_res[1][i] ][1])
+            v = int(self.nr_to_image_plane[ render_res[1][i] ][0])
+            render_des[u,v,:3] = np.array( render_res[0][i] )
+            render_des[u,v,3] = render_res[2][i]
+        
+        indices = real_des[:,:,3] != 0
+        uv = np.where(indices == True)
+        ind2 = render_des[:,:,3] != 0
+        uv2 = np.where(ind2 == True)
+        comp = render_des[ind2][:,3][:,None]
+        disparity_pixels = np.zeros((self.h,self.w,2))-999
+        disparity_world = np.zeros((self.h,self.w,3))
+
+        out = [i for i in range(0,uv[0].shape[0]-1)]
+        random.shuffle( out )
+        matches = 0
+        iterations = 0
+
+        while matches < self.max_matches and iterations < self.max_iterations and iterations < len(out):
+            i = out[iterations]
+            iterations += 1
+            _w, _h = uv[1][i],uv[0][i]
+            ind = (comp == real_des[_h,_w,3])
+            s = np.where(ind == True) 
+            if s[0].shape[0] > 0:
+                matches += 1
+                u,v = uv2[0][s[0][0]], uv2[1][s[0][0]]                
+                disparity_pixels[_h,_w,0] = u - _h
+                disparity_pixels[_h,_w,1] = v - _w
+                disparity_world[_h,_w,:] = render_des[_h,_w,:3]-real_des[_h,_w,:3]
+                
+        f_1 = label_img == int( idx)
+        f_2 = disparity_pixels[:,:,0] != -999
+        f_3 = f_1*f_2
+        points = np.where(f_3!=False)
+        points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
+
+        u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
+        v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
+        x_map = griddata(points, disparity_world[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
+        y_map = griddata(points, disparity_world[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
+        z_map = griddata(points, disparity_world[f_3][:,2], (self.grid_x, self.grid_y), method='nearest')
+
+        return u_map, v_map, x_map, y_map, z_map
+
+    def load_rays_dir(self): 
+        K1 = self.get_camera('data_syn/000001', K=True)
+        K2 = self.get_camera('data/000001',  K=True)
+        
+        self.nr_to_image_plane = np.zeros((self.h*self.w,2), dtype=np.float)
+        self.rays_origin_real = []
+        self.rays_origin_render = []
+        self.rays_dir = []
+        
+        for K in [K1,K2]:
+            u_cor = np.arange(0,self.h,1)
+            v_cor = np.arange(0,self.w,1)
+            K_inv = np.linalg.inv(K)
+            rays_dir = np.zeros((self.h*self.w,3))
+            nr = 0
+            rays_origin_render = np.zeros((self.h*self.w,3))
+            rays_origin_real = np.zeros((self.h*self.w,3))
+            for u in u_cor:
+                for v in v_cor:
+                    rays_dir[nr,:] = K_inv @ np.array([u,v, 1])  * 0.6 - (K_inv @ np.array([u,v, 1])) * 0.25
+                    rays_origin_render[nr,:] = K_inv @ np.array([u,v, 1])  * 0.1
+                    rays_origin_real[nr,:] = K_inv @ np.array([u,v, 1])  * 0.25
+                    self.nr_to_image_plane[nr, 0] = u
+                    self.nr_to_image_plane[nr, 1] = v
+                    nr += 1
+                    
+            self.rays_origin_real.append( rays_origin_real )
+            self.rays_origin_render.append( rays_origin_render )
+            self.rays_dir.append( rays_dir )
+
+    def load_meshes(self):
+        print('loading meshes')
+        p = '/media/scratch1/jonfrey/datasets/YCB_Video_Dataset/models'
+        p = self._p_ycb + '/models'
+        cad_models = [str(p) for p in Path(p).rglob('*.obj')]
+        self.mesh = {}
+        for pa in cad_models:
+            idx = self._name_to_idx[pa.split('/')[-2]]
+            self.mesh[ idx ] = trimesh.load(pa)
+        print('finished loading meshes')
 
     def get_pcd_cad_models(self):
         p = self._cfg_env['p_ycb_obj']

@@ -85,7 +85,7 @@ early_stopping_cfg:
 
 loader:
   batch_size: 8
-  num_workers: 6
+  num_workers: 1
   shuffle: True
   pin_memory: True
 
@@ -113,7 +113,7 @@ d_test:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: 1
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -166,7 +166,7 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
-    overfitting_nr_idx: 1
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
