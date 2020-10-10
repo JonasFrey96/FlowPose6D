@@ -1,6 +1,6 @@
 from loaders_v2 import YCB, Laval, Backend
 import random
-
+import time
 
 class GenericDataset():
 
@@ -72,6 +72,7 @@ class GenericDataset():
             return self._backend._num_pt_mesh_large
 
     def __getitem__(self, index):
+        st = time.time()
         if self.overfitting_nr_idx != -1:
             index = random.randrange(
                 0, self.overfitting_nr_idx) * 1000 % self._length
@@ -80,21 +81,17 @@ class GenericDataset():
         # iterate over a sequence specified in the batch list
         for k in self._batch_list[index][2]:
             # each batch_list entry has the form [obj_name, obj_full_path, index_list]
-            num = '0' * int(6 - len(str(k))) + str(k)
-            tmp = self._backend.getElement(
-                desig=f'{self._batch_list[index][1]}/{num}', obj_idx=self._batch_list[index][0])
+            tmp = False
+            while type(tmp) is bool:
+                num = '0' * int(6 - len(str(k))) + str(k)
+                tmp = self._backend.getElement(
+                    desig=f'{self._batch_list[index][1]}/{num}', obj_idx=self._batch_list[index][0])
+                if type (tmp) is bool:
+                    index = random.randrange(0, len(self))
+                    if self.overfitting_nr_idx != -1:
+                        index = random.randrange(
+                            0, self.overfitting_nr_idx) * 1000 % self._length
+                    k = self._batch_list[index][2][0]
             seq.append(tmp)
-
-            if not isinstance(seq[-1][0], bool):
-                one_object_visible = True
-
-        if self._force_one_object_visible and one_object_visible == False:
-            # ensureres that at least one object is fully visible
-            rand = random.randrange(0, len(self))
-            return self[int(rand)]
-
-        # decide wheater to return as sequence or normal batch
-        if not self._no_list_for_sequence_len_one:
-            return seq
-        else:
-            return tmp
+        print(f'Getitem time: {time.time()-st}')
+        return seq

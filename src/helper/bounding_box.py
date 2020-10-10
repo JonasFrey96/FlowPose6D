@@ -162,6 +162,49 @@ class BoundingBox():
                 _br[1]), :] = img[int(_tl[0]): int(_br[0]), int(_tl[1]): int(_br[1]), :]
 
             return img_pad[off_h + int(self.tl[0]): off_h + int(self.br[0]), off_w + int(self.tl[1]): off_w + int(self.br[1]), :]
+    
+    def crop_info(self, max_height=480, max_width=640):
+        if self.valid():
+            return img[int(self.tl[0]):int(self.br[0]), int(self.tl[1]):int(self.br[1]), :]
+        else:
+            # to find way not to create a new tensor with doube the size (maybe just translate the original image and then pad with 0)
+            h = img.shape[0]
+            w = img.shape[1]
+            p = 300
+            if self.tl[0] < -p:
+                self.tl[0] = -p
+            elif self.tl[0] > max_height + p:
+                self.tl[0] = max_height + p
+
+            if self.tl[1] < -p:
+                self.tl[1] = -p
+            elif self.tl[1] > max_width + p:
+                self.tl[1] = max_width + p
+
+            if self.br[0] < -p:
+                self.br[0] = -p
+            elif self.br[0] > max_height + p:
+                self.br[0] = max_height + p
+
+            if self.br[1] < -p:
+                self.br[1] = -p
+            elif self.br[1] > max_width + p:
+                self.br[1] = max_width + p
+
+            if int(self.br[0]) - int(self.tl[0]) > h:
+                self.br[0] = int((self.br[0] - self.tl[0] + h) / 2)
+                self.tl[0] = int((self.br[0] - self.tl[0] - h) / 2)
+            if int(self.br[1]) - int(self.tl[1]) > w:
+                self.br[1] = int((self.br[1] - self.tl[1] + w) / 2)
+                self.tl[1] = int((self.br[1] - self.tl[1] - w) / 2)
+
+
+            off_h = int(max_height)
+            off_w = int(max_width)
+            _tl, _br = self.limit_bb()
+
+            return int(self.tl[0]), int(self.br[0]), int(self.tl[1]), int(self.br[1])
+
 
     def add_noise(self, std_h, std_w):
         # std_h is the variance that is added to the top corrner position and, bottom_corner position

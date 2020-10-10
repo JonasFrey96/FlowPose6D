@@ -124,6 +124,7 @@ class YCB(Backend):
         """
         desig : sequence/idx
         two problems we face. What is if an object is not visible at all -> meta['obj'] = None
+        obj_idx is elemnt 1-21 !!!
         """
 
         try:
@@ -208,7 +209,7 @@ class YCB(Backend):
         unique_desig = (desig, obj_idx)
 
         if len(mask.nonzero()[0]) <= self._minimum_num_pt:
-            return (False, gt_rot_wxyz, gt_trans, unique_desig)
+            return False
 
         # take the noise color image
         if self._cfg_d['noise_cfg']['status']:
@@ -357,10 +358,10 @@ class YCB(Backend):
             h_real = np.eye(4)
             h_real[:3,:3] = target_r
             h_real[:3,3] = gt_trans
-        
+
             new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
             if new_tup is False:
-                return [False]
+                return False
             # n_tup = (tup[0], 0, 0, *tup[3:6], 0, 0, *tup[8:13])
             # n_tup += new_tu
             n_tup = tup + new_tup
@@ -369,27 +370,29 @@ class YCB(Backend):
 
     def get_rendered_data(self, batch, h_real, obj_idx, label,cam_flag):
 
-
+        st = time.time()
         points, choose, img, target, model_points, idx = batch[0:6]
         depth_img, label, img_orig, cam = batch[6:10]
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
         n = 0
-        m = 0.03
+        m = 0.000001
         r = R.from_euler('zyx', np.random.normal(
-            0, n, (1, 3)), degrees=True)
+            20, n, (1, 3)), degrees=True)
         a = RearangeQuat(1)
         tn = a(torch.tensor(r.as_quat()), 'xyzw')
 
         init_rot_wxyz = compose_quat(
             torch.tensor(gt_rot_wxyz[None, :]), tn)
-        init_trans = torch.normal(mean=torch.tensor(gt_trans), std=m)
 
+        init_trans = torch.normal(mean=torch.tensor(gt_trans), std=m)
+        # h_real[:3,3] = init_trans
         h = 480
         w = 640
         init_rot_mat = quat_to_rot(
             init_rot_wxyz, 'wxyz').unsqueeze(1)
         init_rot_mat = init_rot_mat.view(-1, 3, 3).permute(0, 2, 1)
+        # h_real[:3,:3] = init_rot_mat 
         pred_points = torch.add((model_points @ init_rot_mat), init_trans)
 
         up = torch.nn.UpsamplingBilinear2d(size=(h, w))
@@ -401,20 +404,31 @@ class YCB(Backend):
         
         flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag)
 
-
+        if type( flow ) is bool: 
+            # TODO invalid sample
+            return False
+        
         bb_lsd = get_bb_from_depth(depth)
         b = bb_lsd[0]
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
             # TODO invalid sample
             return False
+
+        K1 = self.get_camera('data_syn/000001', K=True)
         center_ren = backproject_points(
-            h_render[0, :3, 3].view(1, 3), fx=cam[2], fy=cam[3], cx=cam[0], cy=cam[1])
+            h_render[0, :3, 3].view(1, 3), fx=K1[0,0], fy=K1[1,1], cx=K1[0,2], cy=K1[1,2])
         center_ren = center_ren.squeeze()
         b.move(-center_ren[1], -center_ren[0])
         b.expand(1.1)
         b.expand_to_correct_ratio(w, h)
         b.move(center_ren[1], center_ren[0])
+        print('Render' ,str(b) )
+        ren_h = b.height()
+        ren_w = b.width()
+        ren_tl = b.tl
+
+        bb_ren = copy.deepcopy(b)
         crop_ren = b.crop(img_ren[0]).unsqueeze(0)
 
         crop_ren = torch.transpose(crop_ren, 1, 3)
@@ -451,6 +465,14 @@ class YCB(Backend):
         b.expand(1.1)
         b.expand_to_correct_ratio(w, h)
         b.move(center_real[0], center_real[1])
+        print('REAL' ,str(b) )
+        
+        real_h = b.height()
+        real_w = b.width()
+        real_tl = b.tl
+        
+        bb_real = copy.deepcopy(b)
+
         crop_real = b.crop(img_orig).unsqueeze(0)
         up = torch.nn.UpsamplingBilinear2d(size=(h, w))
         crop_real = torch.transpose(crop_real, 1, 3)
@@ -467,7 +489,7 @@ class YCB(Backend):
         tmp = torch.transpose(torch.transpose(
             b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
         gt_label_cropped = torch.round(up(tmp.type(
-            torch.float32).unsqueeze(0))).clamp(0, 21 - 1)[0][0]
+            torch.float32).unsqueeze(0))).clamp(0, 21)[0][0]
         def l_to_cropped(l):
             tmp = b.crop(torch.from_numpy(  l[:,:,None] ))
             tmp = up(tmp[:,:,0] [None,None,:,:] )
@@ -479,6 +501,25 @@ class YCB(Backend):
         y_cropped = l_to_cropped(  flow[3] )
         z_cropped = l_to_cropped(  flow[4] )
 
+        # scale the u and v so this is not in the uncropped space !
+        v_cropped_scaled = np.zeros( v_cropped.shape )
+        u_cropped_scaled = np.zeros( u_cropped.shape )
+        h = self.h
+        w = self.w
+        for _h in range(0,self.h):
+            for _w in range(0,self.w):
+                __w_real = _w/(w/real_w) + real_tl[1]
+                __h_real = _h/(h/real_h) + real_tl[0]
+                
+                __corrospnding_w_in_render =  __w_real   + int(v_cropped[_h,_w])
+                __corrospnding_h_in_render =  __h_real   + int(u_cropped[_h,_w]) 
+                __corrospnding_w_in_cropped_render = int( (__corrospnding_w_in_render - ren_tl[1]) * (w/ren_w))
+                __corrospnding_h_in_cropped_render = int( (__corrospnding_h_in_render - ren_tl[0]) * (h/ren_h)) 
+                uuu = int( _w - (__corrospnding_w_in_cropped_render) )
+                vvv = int( _h - (__corrospnding_h_in_cropped_render) )
+                v_cropped_scaled[_h,_w] = vvv
+                u_cropped_scaled[_h,_w] = uuu
+
         if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             render_img = self._color_jitter_render(render_img)
         if self._cfg_d['output_cfg'].get('color_jitter_real', {}).get('active', False):
@@ -487,8 +528,9 @@ class YCB(Backend):
             render_img = self._norm_render(render_img)
         if self._cfg_d['output_cfg'].get('norm_real', False):
             real_img = self._norm_real(real_img)
-
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0], h_render, img_ren, u_cropped, v_cropped, x_cropped , y_cropped, z_cropped)
+        
+        print(f'get_rendered_data time {time.time()-st}s')
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0], h_render, img_ren, u_cropped, v_cropped, x_cropped, y_cropped, z_cropped, u_cropped_scaled, v_cropped_scaled, bb_real, bb_ren, flow[0], flow[1], flow[-3],flow[-2], flow[-1])
 
     def get_desig(self, path):
         desig = []
@@ -685,7 +727,7 @@ class YCB(Backend):
         #self.mesh[ idx ]
 
         self.max_matches = 500
-        self.max_iterations = 5000
+        self.max_iterations = 2000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
@@ -696,35 +738,51 @@ class YCB(Backend):
         return mesh
         
     def get_flow(self, h_render, h_real, idx, label_img, cam):
+        st = time.time()
         m_real = copy.deepcopy(self.mesh[idx])
         m_render = copy.deepcopy(self.mesh[idx])
-        
+
         m_real = self.transform_mesh(m_real, h_real)
         m_render = self.transform_mesh(m_render, h_render)
 
         from trimesh.ray.ray_pyembree import RayMeshIntersector
         rmi_real = RayMeshIntersector(m_real)
         rmi_render = RayMeshIntersector(m_render)
+
         render_res = rmi_render.intersects_location(ray_origins=self.rays_origin_render[0], 
                                ray_directions=self.rays_dir[0],
                                multiple_hits=False)
+
         real_res = rmi_real.intersects_location(ray_origins=self.rays_origin_real[cam], 
                                     ray_directions=self.rays_dir[cam],
                                     multiple_hits=False)
+
         render_des = np.zeros( (self.h,self.w,4) ) 
         real_des = np.zeros( (self.h,self.w,4) )
+        try:
+            a = 0
+            for j, ray in enumerate(real_res[1]):
+                w_,h_ = self.nr_to_image_plane[ray]
+                w_ =int (w_)
+                h_ = int (h_)
+                real_des[h_,w_,:3] = np.array( real_res[0][j] )
+                real_des[h_,w_,3] = real_res[2][j]
+            a = 1
+            for j, ray in enumerate(render_res[1]):
+                w_,h_ = self.nr_to_image_plane[ray]
+                w_ =int (w_)
+                h_ = int (h_)
+                render_des[h_,w_,:3] = np.array( render_res[0][j] )
+                render_des[h_,w_,3] = render_res[2][j]
+                # u = int(self.nr_to_image_plane[ render_res[1][i] ][1])
+                # v = int(self.nr_to_image_plane[ render_res[1][i] ][0])
+                # the indexe here are confusing given that the returned value is maybe transposed index
+                # render_des[u,v,:3] = np.array( render_res[0][i] )
+                # render_des[u,v,3] = render_res[2][i]
+        except:
+            print('ERROR',  real_res, 'A', a, u , v, render_des.shape, real_des.shape )
+            raise Exception
 
-        for i in range(real_res[1].shape[0]):
-            u = int(self.nr_to_image_plane[ real_res[1][i] ][1])
-            v = int(self.nr_to_image_plane[ real_res[1][i] ][0])
-            real_des[u,v,:3] = np.array( real_res[0][i] )
-            real_des[u,v,3] = real_res[2][i]
-        for i in range(render_res[1].shape[0]):
-            u = int(self.nr_to_image_plane[ render_res[1][i] ][1])
-            v = int(self.nr_to_image_plane[ render_res[1][i] ][0])
-            render_des[u,v,:3] = np.array( render_res[0][i] )
-            render_des[u,v,3] = render_res[2][i]
-        
         indices = real_des[:,:,3] != 0
         uv = np.where(indices == True)
         ind2 = render_des[:,:,3] != 0
@@ -737,37 +795,47 @@ class YCB(Backend):
         random.shuffle( out )
         matches = 0
         iterations = 0
-
         while matches < self.max_matches and iterations < self.max_iterations and iterations < len(out):
             i = out[iterations]
             iterations += 1
-            _w, _h = uv[1][i],uv[0][i]
+            _h, _w = uv[0][i],uv[1][i]
             ind = (comp == real_des[_h,_w,3])
             s = np.where(ind == True) 
             if s[0].shape[0] > 0:
                 matches += 1
+                print(uv2, uv2[0], s[0][0] )
                 u,v = uv2[0][s[0][0]], uv2[1][s[0][0]]                
                 disparity_pixels[_h,_w,0] = u - _h
                 disparity_pixels[_h,_w,1] = v - _w
-                disparity_world[_h,_w,:] = render_des[_h,_w,:3]-real_des[_h,_w,:3]
-                
+                disparity_world[_h,_w,:] = render_des[_w,_h,:3]-real_des[_w,_h,:3]
+        print(f'Finished with {matches} matches and within {iterations} iteartions, len(out), {len(out)}')
         f_1 = label_img == int( idx)
+        print('LABEL_IMG', 'compard to index ',int(idx))
         f_2 = disparity_pixels[:,:,0] != -999
         f_3 = f_1*f_2
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
+        if matches < 50 or np.sum(f_3) < 10: 
+            return False
+
+        if np.sum( f_3 ) == 0:
+            print(f'Failed because no valid point was found {np.sum( f_3 )}')
+            return False
+        # print('points.shape', points.shape)
+        # print('disparity_pixels[f_3][:,0]', disparity_pixels[f_3][:,0].shape)
+
 
         u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
         x_map = griddata(points, disparity_world[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
         y_map = griddata(points, disparity_world[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
         z_map = griddata(points, disparity_world[f_3][:,2], (self.grid_x, self.grid_y), method='nearest')
-
-        return u_map, v_map, x_map, y_map, z_map
+        print(f'Time to get flow {time.time()-st}')
+        return u_map, v_map, x_map, y_map, z_map, render_res, real_res, f_3
 
     def load_rays_dir(self): 
         K1 = self.get_camera('data_syn/000001', K=True)
-        K2 = self.get_camera('data/000001',  K=True)
+        K2 = self.get_camera('data/0068/000001',  K=True)
         
         self.nr_to_image_plane = np.zeros((self.h*self.w,2), dtype=np.float)
         self.rays_origin_real = []
@@ -796,15 +864,19 @@ class YCB(Backend):
             self.rays_dir.append( rays_dir )
 
     def load_meshes(self):
-        print('loading meshes')
+        print('Start loading meshes')
+        st = time.time()
         p = '/media/scratch1/jonfrey/datasets/YCB_Video_Dataset/models'
         p = self._p_ycb + '/models'
         cad_models = [str(p) for p in Path(p).rglob('*.obj')]
         self.mesh = {}
         for pa in cad_models:
-            idx = self._name_to_idx[pa.split('/')[-2]]
-            self.mesh[ idx ] = trimesh.load(pa)
-        print('finished loading meshes')
+            try:
+                idx = self._name_to_idx[pa.split('/')[-2]]
+                self.mesh[ idx ] = trimesh.load(pa)
+            except:
+                pass
+        print(f'Finished loading meshes {time.time()-st}')
 
     def get_pcd_cad_models(self):
         p = self._cfg_env['p_ycb_obj']

@@ -279,8 +279,8 @@ class PixelwiseRefiner(nn.Module):
         self.num_classes = num_classes
         self.head = PredictionHeadConv(num_classes, in_features=128)
 
-        self.translation_head = pointwise_conv(out_features, [128, 64], 3)
-        self.rotation_head = pointwise_conv(out_features, [128, 64], 4)
+        # self.translation_head = pointwise_conv(out_features, [128, 64], 3)
+        # self.rotation_head = pointwise_conv(out_features, [128, 64], 4)
 
         self.segmentation_head = pointwise_conv(
             out_features, [128, 64], num_classes)
