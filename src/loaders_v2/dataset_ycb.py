@@ -443,9 +443,6 @@ class YCB(Backend):
         # real data
         u_cropped = torch.zeros((h, w), dtype=torch.long)
         v_cropped = torch.zeros((h, w), dtype=torch.long)
-        x_cropped = torch.zeros((h, w), dtype=torch.long)
-        y_cropped = torch.zeros((h, w), dtype=torch.long)
-        z_cropped = torch.zeros((h, w), dtype=torch.long) 
         gt_label_cropped = torch.zeros((h, w), dtype=torch.long)
         
         bb_lsd = get_bb_real_target(pred_points[None,:,:], cam[None,:])
@@ -482,6 +479,7 @@ class YCB(Backend):
             b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
         gt_label_cropped = torch.round(self.up(tmp.type(
             torch.float32).unsqueeze(0))).clamp(0, 21)[0][0]
+        
         def l_to_cropped(l):
             tmp = b.crop(torch.from_numpy(  l[:,:,None] ))
             tmp = self.up(tmp[:,:,0] [None,None,:,:] )
@@ -489,32 +487,40 @@ class YCB(Backend):
 
         u_cropped = l_to_cropped(  flow[0] )
         v_cropped = l_to_cropped(  flow[1] )
-        x_cropped = l_to_cropped(  flow[2] )
-        y_cropped = l_to_cropped(  flow[3] )
-        z_cropped = l_to_cropped(  flow[4] )
-        valid_flow_mask_cropped =  l_to_cropped( np.float32(flow[5]) )
+        valid_flow_mask_cropped =  l_to_cropped( np.float32(flow[2]) )
 
         # scale the u and v so this is not in the uncropped space !
         v_cropped_scaled = np.zeros( v_cropped.shape )
         u_cropped_scaled = np.zeros( u_cropped.shape )
+        v_cropped_scaled2 = np.zeros( v_cropped.shape )
+        u_cropped_scaled2 = np.zeros( u_cropped.shape )
         h = self.h
         w = self.w
         st2 = time.time()
         for _h in range(0,self.h):
             for _w in range(0,self.w):
-                __w_real = _w/(w/real_w) + real_tl[1]
-                __h_real = _h/(h/real_h) + real_tl[0]
-                
-                __corrospnding_w_in_render =  __w_real   + int(v_cropped[_h,_w])
-                __corrospnding_h_in_render =  __h_real   + int(u_cropped[_h,_w]) 
-                __corrospnding_w_in_cropped_render = int( (__corrospnding_w_in_render - ren_tl[1]) * (w/ren_w))
-                __corrospnding_h_in_cropped_render = int( (__corrospnding_h_in_render - ren_tl[0]) * (h/ren_h)) 
-                uuu = int( _w - (__corrospnding_w_in_cropped_render) )
-                vvv = int( _h - (__corrospnding_h_in_cropped_render) )
-                v_cropped_scaled[_h,_w] = vvv
-                u_cropped_scaled[_h,_w] = uuu
-        print(f'shift disparity time: {time.time()-st2}s')
 
+                v_cropped_scaled[_h,_w] = int( _w - ( int( ( ( (_w/(w/real_w) + real_tl[1])  + int(v_cropped[_h,_w])) - ren_tl[1]) * (w/ren_w)) ) )
+                u_cropped_scaled[_h,_w] = int( _h - ( int( ( ( (_h/(h/real_h) + real_tl[0])   + int(u_cropped[_h,_w])) - ren_tl[0]) * (h/ren_h)) ) )
+        print(f'shift disparity time: {time.time()-st2 }s')
+        grid_x, grid_y = np.mgrid[0:h, 0:w]
+        g = np.stack([grid_x,grid_y], axis=2)
+        st2 = time.time()
+        nr1 = np.full((h,w), float(w/real_w) )
+        nr2 = np.full((h,w), float(real_tl[1]) )
+        nr3 = np.full((h,w), float(ren_tl[1]) )
+        nr4 = np.full((h,w), float(w/ren_w) )
+        print(type( v_cropped), type(nr1),type(nr2),type(nr3),type(nr4) ) 
+        v_cropped_scaled2 = np.round(g[:,:,1]-(np.round((((g[:,:,1]/(nr1)+nr2) +np.round(v_cropped.numpy()[:,:]))-nr3)*(nr4))))
+        nr1 = np.full((h,w), float( h/real_h))
+        nr2 = np.full((h,w), float( real_tl[0]))
+        nr3 = np.full((h,w), float(ren_tl[0]))
+        nr4 = np.full((h,w), float(h/ren_h))
+        u_cropped_scaled2 = np.round(g[:,:,0]-(np.round((((g[:,:,0]/(nr1)+nr2) +np.round(u_cropped.numpy()[:,:]))-nr3)*(nr4))))
+        print(f'shift disparity time: {time.time()-st2 }s')
+
+        print( np.sum(np.abs(v_cropped_scaled- v_cropped_scaled2), axis=(0,1) ))
+        print( np.sum(np.abs(u_cropped_scaled- u_cropped_scaled2), axis=(0,1) ))
 
         if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             render_img = self._color_jitter_render(render_img)
@@ -526,7 +532,7 @@ class YCB(Backend):
             real_img = self._norm_real(real_img)
         
         print(f'get_rendered_data time {time.time()-st}s')
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0], h_render, img_ren, u_cropped_scaled, v_cropped_scaled, x_cropped, y_cropped, z_cropped, valid_flow_mask_cropped)
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0], h_render, img_ren, u_cropped_scaled, v_cropped_scaled, valid_flow_mask_cropped)
 
     def get_desig(self, path):
         desig = []
@@ -769,12 +775,13 @@ class YCB(Backend):
         uv2 = np.where(ind2 == True)
         comp = render_des[ind2][:,3][:,None]
         disparity_pixels = np.zeros((self.h,self.w,2))-999
-        disparity_world = np.zeros((self.h,self.w,3))
 
         out = [i for i in range(0,uv[0].shape[0]-1)]
         random.shuffle( out )
         matches = 0
         iterations = 0
+        st__ = time.time()
+
         while matches < self.max_matches and iterations < self.max_iterations and iterations < len(out):
             i = out[iterations]
             iterations += 1
@@ -786,9 +793,8 @@ class YCB(Backend):
                 u,v = uv2[0][s[0][0]], uv2[1][s[0][0]]                
                 disparity_pixels[_h,_w,0] = u - _h
                 disparity_pixels[_h,_w,1] = v - _w
-                disparity_world[_h,_w,:] = render_des[_w,_h,:3]-real_des[_w,_h,:3]
-        
-        print(f'Finished with {matches} matches and within {iterations} iteartions, len(out), {len(out)}')
+
+        print(f'Finished with {matches} matches and within {iterations} iteartions, len(out), {len(out)} within: {time.time()-st__}s')
         f_1 = label_img == int( idx)
         f_2 = disparity_pixels[:,:,0] != -999
         f_3 = f_1*f_2
@@ -804,9 +810,6 @@ class YCB(Backend):
         st = time.time()
         u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
-        x_map = griddata(points, disparity_world[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
-        y_map = griddata(points, disparity_world[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
-        z_map = griddata(points, disparity_world[f_3][:,2], (self.grid_x, self.grid_y), method='nearest')
         print(f'Grid data time {time.time()-st}')
 
         inp = np.uint8( f_3*255 ) 
@@ -814,7 +817,7 @@ class YCB(Backend):
         valid_flow_mask = ( cv2.dilate(inp, kernel, iterations = 1) != 0 )
         valid_flow_mask = valid_flow_mask * f_1
 
-        return u_map, v_map, x_map, y_map, z_map, valid_flow_mask
+        return u_map, v_map, valid_flow_mask
 
     def load_rays_dir(self): 
         K1 = self.get_camera('data_syn/000001', K=True)

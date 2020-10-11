@@ -170,9 +170,9 @@ d_train:
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.03
+    noise_translation: 0.00000001
     noise_rotation: 30
-    
+
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
