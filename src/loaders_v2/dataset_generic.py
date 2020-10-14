@@ -72,7 +72,6 @@ class GenericDataset():
             return self._backend._num_pt_mesh_large
 
     def __getitem__(self, index):
-        st = time.time()
         if self.overfitting_nr_idx != -1:
             index = random.randrange(
                 0, self.overfitting_nr_idx) * 1000 % self._length
@@ -87,11 +86,11 @@ class GenericDataset():
                 tmp = self._backend.getElement(
                     desig=f'{self._batch_list[index][1]}/{num}', obj_idx=self._batch_list[index][0])
                 if type (tmp) is bool:
+                    # print('Skipped a frame')
                     index = random.randrange(0, len(self))
                     if self.overfitting_nr_idx != -1:
                         index = random.randrange(
                             0, self.overfitting_nr_idx) * 1000 % self._length
                     k = self._batch_list[index][2][0]
             seq.append(tmp)
-        print(f'Getitem time: {time.time()-st}')
         return seq

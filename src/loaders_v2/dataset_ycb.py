@@ -87,7 +87,7 @@ class YCB(Backend):
             self._vm = ViewpointManager(
                 store=copy.deepcopy(store),
                 name_to_idx=copy.deepcopy(self._name_to_idx),
-                nr_of_images_per_object=1000,
+                nr_of_images_per_object=5000,
                 device='cpu',
                 load_images=False)
             self.up = torch.nn.UpsamplingBilinear2d(size=(self.h, self.w))
@@ -129,7 +129,7 @@ class YCB(Backend):
         two problems we face. What is if an object is not visible at all -> meta['obj'] = None
         obj_idx is elemnt 1-21 !!!
         """
-
+        st = time.time()
         try:
             img = Image.open(
                 '{0}/{1}-color.png'.format(self._p_ycb, desig))
@@ -356,17 +356,27 @@ class YCB(Backend):
         tup = tup + (gt_rot_wxyz, gt_trans, unique_desig)
 
         if self._use_vm:
+            # print('time to get flow:', time.time()-st)
             cam_flag= self.get_camera(desig, K=False, idx=True)
 
             h_real = np.eye(4)
             h_real[:3,:3] = target_r
             h_real[:3,3] = gt_trans
 
+
             new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
+            
             if new_tup is False:
                 return False
-            # n_tup = (tup[0], 0, 0, *tup[3:6], 0, 0, *tup[8:13])
+            n_tup = (0, 0, 0, 0, tup[4], tup[5] , 0, 0,*tup[8:13])
             # n_tup += new_tu
+            # tup[0] = 0
+            # tup[1] = 0
+            # tup[2] = 0
+            # tup[3] = 0
+            # tup[6] = 0
+            # tup[7] = 0
+
             n_tup = tup + new_tup
             return n_tup
         return tup
@@ -375,7 +385,7 @@ class YCB(Backend):
         h = 480
         w = 640
         nt = self._cfg_d['output_cfg'].get('noise_translation', 0.03) 
-        nr = self._cfg_d['output_cfg'].get('noise_rotation', 30) 
+        nr = self._cfg_d['output_cfg'].get('noise_rotation', 10) 
 
         st = time.time()
         points, choose, img, target, model_points, idx = batch[0:6]
@@ -386,32 +396,34 @@ class YCB(Backend):
         init_trans = torch.normal(mean=torch.tensor(gt_trans), std=nt)
 
         # set inital rotaiton
-        r1 = R.from_quat( re_quat( copy.copy(gt_rot_wxyz) , 'wxyz') )
-        r2 = R.from_euler('zyx', np.random.normal(
-            0, nr, (1, 3)), degrees=True)
-        init_rot_mat = (r1 * r2).as_matrix()
-        init_rot_wxyz = torch.tensor( re_quat( (r1 * r2).as_quat()[0], 'xyzw') )
-
+        r1 = R.from_quat( re_quat( copy.copy(gt_rot_wxyz) , 'wxyz') ).as_matrix()
+        animate = False
+        if animate:
+            try:
+                self.animation_step += 1
+            except:
+                self.animation_step = 0
+            r2 = R.from_euler('zyx', np.array([[0,self.animation_step*5,0]]), degrees=True).as_matrix()
+        else:
+            r2 = R.from_euler('zyx', np.random.normal(
+                0, nr, (1, 3)), degrees=True).as_matrix()
+        init_rot_mat = r1 @ r2
+        init_rot_wxyz = torch.tensor( re_quat( R.from_matrix(init_rot_mat).as_quat()[0], 'xyzw') )
+        
         # transform points
         pred_points = torch.add((model_points @ init_rot_mat[0].T), init_trans)
         
         
         render_img = torch.zeros((3, h, w))
         render_d = torch.empty((1, h, w))
-        
         img_ren, depth, h_render = self._vm.get_closest_image_batch(
             i=idx[None], rot=init_rot_wxyz[None,:], conv='wxyz')
-        
-        flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag)
 
-        if type( flow ) is bool: 
-            return False
-        
         bb_lsd = get_bb_from_depth(depth)
         b = bb_lsd[0]
         tl, br = b.limit_bb()
-        
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
+            print('BB to render')
             return False
 
         K1 = self.get_camera('data_syn/000001', K=True)
@@ -419,13 +431,13 @@ class YCB(Backend):
             h_render[0, :3, 3].view(1, 3), fx=K1[0,0], fy=K1[1,1], cx=K1[0,2], cy=K1[1,2])
         center_ren = center_ren.squeeze()
         b.move(-center_ren[1], -center_ren[0])
-        b.expand(1.1)
+        b.expand(1)
         b.expand_to_correct_ratio(w, h)
         b.move(center_ren[1], center_ren[0])
         ren_h = b.height()
         ren_w = b.width()
         ren_tl = b.tl
-
+        b_ren = copy.deepcopy(b)
         crop_ren = b.crop(img_ren[0]).unsqueeze(0)
         crop_ren = torch.transpose(crop_ren, 1, 3)
         crop_ren = torch.transpose(crop_ren, 2, 3)
@@ -450,18 +462,20 @@ class YCB(Backend):
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
             # TODO invalid sample
+            print('BB to real')
             return False
         center_real = backproject_points(
             init_trans[None], fx=cam[2], fy=cam[3], cx=cam[0], cy=cam[1])
         center_real = center_real.squeeze()
         b.move(-center_real[0], -center_real[1])
-        b.expand(1.1)
+        b.expand(1)
         b.expand_to_correct_ratio(w, h)
         b.move(center_real[0], center_real[1])
         
         real_h = b.height()
         real_w = b.width()
         real_tl = b.tl
+        b_real = copy.deepcopy(b)
         
         crop_real = b.crop(img_orig).unsqueeze(0)
         crop_real = torch.transpose(crop_real, 1, 3)
@@ -485,6 +499,12 @@ class YCB(Backend):
             tmp = self.up(tmp[:,:,0] [None,None,:,:] )
             return tmp[0,0]
 
+        #get flow
+        flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag, b_real, b_ren )
+
+        if type( flow ) is bool: 
+            # print('Flow failed')
+            return False
         u_cropped = l_to_cropped(  flow[0] )
         v_cropped = l_to_cropped(  flow[1] )
         valid_flow_mask_cropped =  l_to_cropped( np.float32(flow[2]) )
@@ -492,35 +512,18 @@ class YCB(Backend):
         # scale the u and v so this is not in the uncropped space !
         v_cropped_scaled = np.zeros( v_cropped.shape )
         u_cropped_scaled = np.zeros( u_cropped.shape )
-        v_cropped_scaled2 = np.zeros( v_cropped.shape )
-        u_cropped_scaled2 = np.zeros( u_cropped.shape )
         h = self.h
         w = self.w
-        st2 = time.time()
-        for _h in range(0,self.h):
-            for _w in range(0,self.w):
-
-                v_cropped_scaled[_h,_w] = int( _w - ( int( ( ( (_w/(w/real_w) + real_tl[1])  + int(v_cropped[_h,_w])) - ren_tl[1]) * (w/ren_w)) ) )
-                u_cropped_scaled[_h,_w] = int( _h - ( int( ( ( (_h/(h/real_h) + real_tl[0])   + int(u_cropped[_h,_w])) - ren_tl[0]) * (h/ren_h)) ) )
-        print(f'shift disparity time: {time.time()-st2 }s')
-        grid_x, grid_y = np.mgrid[0:h, 0:w]
-        g = np.stack([grid_x,grid_y], axis=2)
-        st2 = time.time()
         nr1 = np.full((h,w), float(w/real_w) )
         nr2 = np.full((h,w), float(real_tl[1]) )
         nr3 = np.full((h,w), float(ren_tl[1]) )
         nr4 = np.full((h,w), float(w/ren_w) )
-        print(type( v_cropped), type(nr1),type(nr2),type(nr3),type(nr4) ) 
-        v_cropped_scaled2 = np.round(g[:,:,1]-(np.round((((g[:,:,1]/(nr1)+nr2) +np.round(v_cropped.numpy()[:,:]))-nr3)*(nr4))))
+        v_cropped_scaled = (self.grid_y -((np.multiply((( np.divide( self.grid_y , nr1)+nr2) +(v_cropped.numpy()).astype(np.long)) - nr3 , nr4)).astype(np.long))).astype(np.long)
         nr1 = np.full((h,w), float( h/real_h))
         nr2 = np.full((h,w), float( real_tl[0]))
         nr3 = np.full((h,w), float(ren_tl[0]))
         nr4 = np.full((h,w), float(h/ren_h))
-        u_cropped_scaled2 = np.round(g[:,:,0]-(np.round((((g[:,:,0]/(nr1)+nr2) +np.round(u_cropped.numpy()[:,:]))-nr3)*(nr4))))
-        print(f'shift disparity time: {time.time()-st2 }s')
-
-        print( np.sum(np.abs(v_cropped_scaled- v_cropped_scaled2), axis=(0,1) ))
-        print( np.sum(np.abs(u_cropped_scaled- u_cropped_scaled2), axis=(0,1) ))
+        u_cropped_scaled = np.round(self.grid_x -(np.round((((self.grid_x /nr1)+nr2) +np.round(u_cropped.numpy()[:,:]))-nr3)*(nr4)))
 
         if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             render_img = self._color_jitter_render(render_img)
@@ -531,8 +534,11 @@ class YCB(Backend):
         if self._cfg_d['output_cfg'].get('norm_real', False):
             real_img = self._norm_real(real_img)
         
-        print(f'get_rendered_data time {time.time()-st}s')
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points[0], h_render, img_ren, u_cropped_scaled, v_cropped_scaled, valid_flow_mask_cropped)
+        real_d = 0
+        render_d = 0
+        pred_points = 0
+        img_ren = 0
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points, h_render, img_ren, torch.from_numpy( u_cropped_scaled ), torch.from_numpy( v_cropped_scaled), valid_flow_mask_cropped.type(torch.bool) )
 
     def get_desig(self, path):
         desig = []
@@ -723,8 +729,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 500
-        self.max_iterations = 2000
+        self.max_matches = 200
+        self.max_iterations = 10000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
@@ -734,7 +740,12 @@ class YCB(Backend):
         mesh.vertices = (t @ H.T)[:,:3]
         return mesh
         
-    def get_flow(self, h_render, h_real, idx, label_img, cam):
+    def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
+        f_1 = label_img == int( idx)
+        if np.sum(f_1) < 200:
+            # to little of the object is visible 
+            return False
+
         st = time.time()
         m_real = copy.deepcopy(self.mesh[idx])
         m_render = copy.deepcopy(self.mesh[idx])
@@ -744,73 +755,86 @@ class YCB(Backend):
 
         rmi_real = RayMeshIntersector(m_real)
         rmi_render = RayMeshIntersector(m_render)
+        # locations index_ray index_tri
 
-        render_res = rmi_render.intersects_location(ray_origins=self.rays_origin_render[0], 
-                               ray_directions=self.rays_dir[0],
+        # crop the rays to the bounding box of the object to compute less rays
+        tl, br = b_real.limit_bb()
+        rays_origin_real2 = np.reshape(self.rays_origin_real[cam] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])]
+        rays_dir_real2 = np.reshape( self.rays_dir[cam] , (self.h,self.w,3) )[int(tl[0]) : int(br[0]), int(tl[1]): int(br[1])]
+        
+        tl, br = b_ren.limit_bb()
+        rays_origin_render2 = np.reshape(self.rays_origin_real[0] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])]
+        rays_dir_render2 = np.reshape( self.rays_dir[0] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])]
+        st_ = time.time()
+        # ray traceing
+        render_res = rmi_render.intersects_location(ray_origins=np.reshape( rays_origin_render2, (-1,3) ), 
+                               ray_directions=np.reshape(rays_dir_render2 ,(-1,3)),
                                multiple_hits=False)
-
-        real_res = rmi_real.intersects_location(ray_origins=self.rays_origin_real[cam], 
-                                    ray_directions=self.rays_dir[cam],
+        real_res = rmi_real.intersects_location(ray_origins=np.reshape( rays_origin_real2, (-1,3) ) , 
+                                    ray_directions=np.reshape(rays_dir_real2 ,(-1,3)),
                                     multiple_hits=False)
+        #print(f'Ray traceing time {time.time()-st_}')
 
-        render_des = np.zeros( (self.h,self.w,4) ) 
-        real_des = np.zeros( (self.h,self.w,4) )
-        for j, ray in enumerate(real_res[1]):
-            w_,h_ = self.nr_to_image_plane[ray]
-            w_ =int (w_)
-            h_ = int (h_)
-            real_des[h_,w_,:3] = np.array( real_res[0][j] )
-            real_des[h_,w_,3] = real_res[2][j]
-        for j, ray in enumerate(render_res[1]):
-            w_,h_ = self.nr_to_image_plane[ray]
-            w_ =int (w_)
-            h_ = int (h_)
-            render_des[h_,w_,:3] = np.array( render_res[0][j] )
-            render_des[h_,w_,3] = render_res[2][j]
+        st_ = time.time()
 
+        tl, br = b_real.limit_bb() 
+        ww = float( br[1]-tl[1] )
 
-        indices = real_des[:,:,3] != 0
-        uv = np.where(indices == True)
-        ind2 = render_des[:,:,3] != 0
-        uv2 = np.where(ind2 == True)
-        comp = render_des[ind2][:,3][:,None]
+        w_idx_real = ((real_res[1] / ww).astype(np.long) + tl[0].numpy()).astype(np.long)
+        h_idx_real = (np.mod( real_res[1], np.full(real_res[1].shape,ww)) + tl[1].numpy()).astype(np.long)
+        h_idx_real[ h_idx_real < 0 ] = -1
+        h_idx_real[ h_idx_real > (self.h-1) ] = -1
+        w_idx_real[ w_idx_real < 0 ] = -1
+        w_idx_real[ w_idx_real > (self.w-1) ] = -1
+        
+
+        tl, br = b_ren.limit_bb() 
+        ww = float( br[1]-tl[1] )
+        w_idx_ren = ((render_res[1] / ww).astype(np.long) + tl[0].numpy()).astype(np.long)
+        h_idx_ren = (np.mod( render_res[1], np.full(render_res[1].shape,ww)) + tl[1].numpy()).astype(np.long)
+        h_idx_ren[ h_idx_ren < 0 ] = -1
+        h_idx_ren[ h_idx_ren > (self.h-1) ] = -1
+        w_idx_ren[ w_idx_ren < 0 ] = -1
+        w_idx_ren[ w_idx_ren > (self.w-1) ] = -1
+
+        # print(f'Indexing ray res {time.time()-st_}')    
         disparity_pixels = np.zeros((self.h,self.w,2))-999
-
-        out = [i for i in range(0,uv[0].shape[0]-1)]
-        random.shuffle( out )
         matches = 0
-        iterations = 0
-        st__ = time.time()
-
-        while matches < self.max_matches and iterations < self.max_iterations and iterations < len(out):
-            i = out[iterations]
-            iterations += 1
-            _h, _w = uv[0][i],uv[1][i]
-            ind = (comp == real_des[_h,_w,3])
-            s = np.where(ind == True) 
+        i = 0
+        idx_pre = np.random.permutation( np.arange(0,real_res[2].shape[0]) ).astype(np.long)
+        # print( str(b_real) )
+        while matches < self.max_matches and i < self.max_iterations and i < real_res[2].shape[0]:
+            r_id = idx_pre[i]
+            mesh_id = int(  real_res[2][r_id] )
+            s = np.where( render_res[2] == mesh_id ) 
             if s[0].shape[0] > 0:
-                matches += 1
-                u,v = uv2[0][s[0][0]], uv2[1][s[0][0]]                
-                disparity_pixels[_h,_w,0] = u - _h
-                disparity_pixels[_h,_w,1] = v - _w
+                j = s[0][0]
+                _h = h_idx_real[r_id]
+                _w = w_idx_real[r_id]
 
-        print(f'Finished with {matches} matches and within {iterations} iteartions, len(out), {len(out)} within: {time.time()-st__}s')
-        f_1 = label_img == int( idx)
+                if _h == -1 or _w == -1 or h_idx_ren[j] == -1  or w_idx_ren[j] == -1:  
+                    pass
+                    # print('encountered invalid pixel')
+                else:
+                    disparity_pixels[_h,_w,0] = h_idx_ren[j] - _h
+                    disparity_pixels[_h,_w,1] = w_idx_ren[j] - _w
+                    matches += 1
+
+            i += 1
+    
+        #print(f'Finished with {matches} matches and within {i} iteartions within: {time.time()-st_}s')
+        
         f_2 = disparity_pixels[:,:,0] != -999
         f_3 = f_1*f_2
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
         if matches < 50 or np.sum(f_3) < 10: 
-            return False
-
-        if np.sum( f_3 ) == 0:
-            print(f'Failed because no valid point was found {np.sum( f_3 )}')
+            # print(f'not enough matches{matches}, F3 {np.sum(f_3)}, REAL {h_idx_real.shape}')
+            # print(render_res, rays_dir_render2.shape, rays_origin_render2.shape )
             return False
         
-        st = time.time()
         u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
-        print(f'Grid data time {time.time()-st}')
 
         inp = np.uint8( f_3*255 ) 
         kernel = np.ones((6,6),np.uint8)
@@ -827,7 +851,7 @@ class YCB(Backend):
         self.rays_origin_real = []
         self.rays_origin_render = []
         self.rays_dir = []
-        
+
         for K in [K1,K2]:
             u_cor = np.arange(0,self.h,1)
             v_cor = np.arange(0,self.w,1)
@@ -850,7 +874,6 @@ class YCB(Backend):
             self.rays_dir.append( rays_dir )
 
     def load_meshes(self):
-        print('Start loading meshes')
         st = time.time()
         p = '/media/scratch1/jonfrey/datasets/YCB_Video_Dataset/models'
         p = self._p_ycb + '/models'

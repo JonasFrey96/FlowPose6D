@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_one_batch_long/_" #overfit_1_batch_bs_1
+model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/debug/_" #overfit_1_batch_bs_1
 estimator_restore: false
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
@@ -36,7 +36,7 @@ loss:
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-5
+lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -56,7 +56,7 @@ trainer:
   num_nodes: 1
   precision: 16
   auto_lr_find: false
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 1
   fast_dev_run: false
   limit_train_batches: 2000
   limit_val_batches: 5
@@ -85,8 +85,8 @@ early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 1
-  num_workers: 1
+  batch_size: 4
+  num_workers: 10
   shuffle: True
   pin_memory: True
 
@@ -114,7 +114,7 @@ d_test:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: -1
+    overfitting_nr_idx: 10
     vm_in_dataloader: true
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -168,10 +168,10 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
-    overfitting_nr_idx: -1
+    overfitting_nr_idx: 10
     vm_in_dataloader: true
-    noise_translation: 0.00000001
-    noise_rotation: 30
+    noise_translation: 0.01
+    noise_rotation: 5
 
     return_same_size_tensors: true
     force_one_object_visible: true

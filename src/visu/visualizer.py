@@ -89,7 +89,7 @@ class Visualizer():
 
         def bin_dir_amplitude(delta_v):
             amp = torch.norm(delta_v, p=2, dim=2)
-            amp = amp / torch.max(amp)  # normalize the amplitude
+            amp = amp / (torch.max(amp)+1.0e-6)  # normalize the amplitude
             dir_bin = torch.atan2(delta_v[:, :, 0], delta_v[:, :, 1])
             nr_bins = 8
             bin_rad = 2 * pi / nr_bins
@@ -108,8 +108,7 @@ class Visualizer():
 Vertical, pos down | neg up:
   max = {torch.max(delta_v[mask][:,1])}
   min = {torch.min(delta_v[mask][:,1])}
-  mean = {torch.mean(delta_v[mask][:,1])} 
-\n"""
+  mean = {torch.mean(delta_v[mask][:,1])}"""
         draw.text((10, 60), txt, fill=(255, 255, 255, 255))
         col = (0, 255, 0)
         grey = (207, 207, 207)
@@ -409,6 +408,7 @@ Vertical, pos down | neg up:
             #store_ar = (img_d* 255).round().astype(np.uint8)
             plt.savefig(
                 f'{self.p_visu}/{str(epoch)}_{tag}_network_input.png', dpi=300)
+                
             #save_image(img_d, tag=str(epoch) + tag, p_store=self.p_visu)
         if jupyter:
             plt.show()
@@ -418,6 +418,35 @@ Vertical, pos down | neg up:
             self.writer.add_image(
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
         plt.close()
+    
+    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False):
+        cropped_comp = np.swapaxes( np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=2).astype(np.uint8).T,0,1)
+        cropped_comp_img = Image.fromarray(cropped_comp)
+        draw = ImageDraw.Draw(cropped_comp_img)
+        w= 640
+        h = 480
+        col = (0,255,0)
+        for _w in range(0,w,20):
+            for _h in range(0,h,20): 
+
+                if flow_mask[_h,_w] != 0:
+                    try:
+                        delta_h = u_map[_h,_w]
+                        delta_w = v_map[_h,_w]
+                        
+                        draw.line([(int(_w), int(_h)), (int(_w + w - delta_w ), int( _h - delta_h))],
+                        fill=col, width=1)
+                    except:
+                        print('failed')
+        if store:
+            cropped_comp_img.save(f'{self.p_visu}/{str(epoch)}_{tag}_corrospondence.png')
+        if jupyter:
+             display(cropped_comp_img)
+        if self.writer is not None:
+            plot_img_np = np.array( cropped_comp_img )
+            self.writer.add_image(
+                tag, plot_img_np, global_step=epoch, dataformats='HWC')
+       
 
     def visu_network_input_pred(self, tag, epoch, data, images, target, cam, max_images=10, store=False, jupyter=False):
         num = min(max_images, data.shape[0])
