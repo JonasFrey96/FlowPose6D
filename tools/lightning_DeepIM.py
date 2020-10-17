@@ -291,7 +291,6 @@ class TrackNet6D(LightningModule):
         delta_v, rotations, p_label = self.pixelwise_refiner(
             data, idx)
 
-        print( 'Label: ',  torch.min( p_label), torch.max( p_label),'Label Cropped: ', torch.min( gt_label_cropped) , torch.max( gt_label_cropped))
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
 
@@ -310,7 +309,7 @@ class TrackNet6D(LightningModule):
                 store=True)
 
             seg_max = p_label.argmax(dim=1)
-            self.visualizer.plot_segmentation(tag=f'gt_segmentation_cropped_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_segmentation(tag=f'gt_segmentation_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 label=gt_label_cropped[0].cpu(
                                                 ).numpy(),
@@ -322,10 +321,18 @@ class TrackNet6D(LightningModule):
                                                 ).numpy(),
                                                 store=True)
     
-            self.visualizer.plot_corrospondence(tag=f'predicted_flow_h_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_corrospondence(tag=f'gt_flow_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 u_map=u_map[0], 
                                                 v_map=v_map[0], 
+                                                flow_mask=flow_mask[0], 
+                                                real_img=real_img[0], 
+                                                render_img=render_img[0],
+                                                store=True)
+            self.visualizer.plot_corrospondence(tag=f'predicted_flow_{self._mode}_nr_{self.counter_images_logged}',
+                                                epoch=self.current_epoch,
+                                                u_map= delta_v[0,0,:,:], 
+                                                v_map= delta_v[0,1,:,:], 
                                                 flow_mask=flow_mask[0], 
                                                 real_img=real_img[0], 
                                                 render_img=render_img[0],
@@ -354,7 +361,7 @@ class TrackNet6D(LightningModule):
             self.visu_forward = False
 
         # forward
-        dis,log_scalars = self(batch[0])
+        dis, log_scalars = self(batch[0])
 
         loss = torch.mean(dis)
         
@@ -387,18 +394,18 @@ class TrackNet6D(LightningModule):
         bs = dis.shape[0]
         
         # aggregate statistics per object (ADD-S sym and ADD non sym)
-        loss = torch.mean(torch.sum(dis))
-        # self.visu_step(nr, batch, pred_r, pred_t, batch_idx)
+        loss = torch.mean(dis)
         
         try:
             self._dict_track['val_loss  [+inf - 0]'].append(float(loss))
         except:
             self._dict_track['val_loss  [+inf - 0]'] = [float(loss)]
+        
         for i in range(0, bs):
             # object loss for each object
             obj = int(unique_desig[1][i])
             obj = list(
-                self.trainer.val_dataloaders[0].dataset._backend._name_to_idx.keys())[obj - 1]
+                self.trainer.val_dataloaders[0].dataset._backend._name_to_idx_full.keys())[obj - 1]
             if f'val_{obj}_adds_dis  [+inf - 0]' in self._dict_track.keys():
                 self._dict_track[f'val_{obj}_adds_dis  [+inf - 0]'].append(
                     float(dis[i]))
@@ -412,7 +419,6 @@ class TrackNet6D(LightningModule):
         val_loss = loss
         val_dis = loss
         return {'val_loss': val_loss, 'val_dis': val_dis, 'log': tensorboard_logs}
-
     # def test_step(self, batch, batch_idx):
     #     self._mode = 'test'
     #     total_loss = 0
@@ -926,6 +932,7 @@ if __name__ == "__main__":
             # print('LR FInder suggestion', lr_finder.suggestion())
             # print(lr_finder.results)
             trainer.fit(model)
+            print()
         elif exp.get('model_mode', 'fit') == 'test':
             trainer.test(model)
             if exp.get('conv_test2df', False):

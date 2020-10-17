@@ -58,7 +58,7 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 2000
+  limit_train_batches: 5
   limit_val_batches: 5
   limit_test_batches: 5
   progress_bar_refresh_rate: 1
@@ -86,9 +86,9 @@ early_stopping_cfg:
 
 loader:
   batch_size: 4
-  num_workers: 10
+  num_workers: 1
   shuffle: True
-  pin_memory: True
+  pin_memory: False
 
 d_test:
   name: "ycb"
@@ -171,7 +171,7 @@ d_train:
     overfitting_nr_idx: 10
     vm_in_dataloader: true
     noise_translation: 0.01
-    noise_rotation: 5
+    noise_rotation: 45
 
     return_same_size_tensors: true
     force_one_object_visible: true

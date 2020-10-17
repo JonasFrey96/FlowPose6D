@@ -53,7 +53,7 @@ class YCB(Backend):
         self._cfg_d = cfg_d
         self._cfg_env = cfg_env
         self._p_ycb = cfg_env['p_ycb']
-        self._pcd_cad_dict, self._name_to_idx = self.get_pcd_cad_models()
+        self._pcd_cad_dict, self._name_to_idx, self._name_to_idx_full = self.get_pcd_cad_models()
         self._batch_list = self.get_batch_list()
         self.h = 480
         self.w = 640
@@ -538,7 +538,7 @@ class YCB(Backend):
         render_d = 0
         pred_points = 0
         img_ren = 0
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points, h_render, img_ren, torch.from_numpy( u_cropped_scaled ), torch.from_numpy( v_cropped_scaled), valid_flow_mask_cropped.type(torch.bool) )
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz[0], init_trans, pred_points, h_render[0], torch.from_numpy(np.float32( h_real )), img_ren, torch.from_numpy( u_cropped_scaled ), torch.from_numpy( v_cropped_scaled), valid_flow_mask_cropped.type(torch.bool) , b_real, b_ren)
 
     def get_desig(self, path):
         desig = []
@@ -729,8 +729,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 200
-        self.max_iterations = 10000
+        self.max_matches = 40000
+        self.max_iterations = 40000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
@@ -741,6 +741,7 @@ class YCB(Backend):
         return mesh
         
     def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
+        st___ = time.time()
         f_1 = label_img == int( idx)
         if np.sum(f_1) < 200:
             # to little of the object is visible 
@@ -758,51 +759,78 @@ class YCB(Backend):
         # locations index_ray index_tri
 
         # crop the rays to the bounding box of the object to compute less rays
+        # subsample to even compute less rays ! 
+        sub = 1
         tl, br = b_real.limit_bb()
-        rays_origin_real2 = np.reshape(self.rays_origin_real[cam] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])]
-        rays_dir_real2 = np.reshape( self.rays_dir[cam] , (self.h,self.w,3) )[int(tl[0]) : int(br[0]), int(tl[1]): int(br[1])]
+        print(f'REAL Height: top {tl[0]} bot {br[0]}')
+        print(f'REAL Width: left {tl[1]} right {br[1]}')
+        h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+        w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+
+        rays_origin_real = np.reshape(self.rays_origin_real[cam] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        rays_dir_real = np.reshape( self.rays_dir[cam] , (self.h,self.w,3) )[int(tl[0]) : int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
         
         tl, br = b_ren.limit_bb()
-        rays_origin_render2 = np.reshape(self.rays_origin_real[0] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])]
-        rays_dir_render2 = np.reshape( self.rays_dir[0] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])]
+        rays_origin_render = np.reshape(self.rays_origin_real[0] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        rays_dir_render = np.reshape( self.rays_dir[0] , (self.h,self.w,3) )[int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        h_idx_render = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+        w_idx_render = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+
         st_ = time.time()
         # ray traceing
-        render_res = rmi_render.intersects_location(ray_origins=np.reshape( rays_origin_render2, (-1,3) ), 
-                               ray_directions=np.reshape(rays_dir_render2 ,(-1,3)),
-                               multiple_hits=False)
-        real_res = rmi_real.intersects_location(ray_origins=np.reshape( rays_origin_real2, (-1,3) ) , 
-                                    ray_directions=np.reshape(rays_dir_real2 ,(-1,3)),
-                                    multiple_hits=False)
-        #print(f'Ray traceing time {time.time()-st_}')
+        render_res_mesh_id = rmi_render.intersects_first(ray_origins=np.reshape( rays_origin_render, (-1,3) ), 
+            ray_directions=np.reshape(rays_dir_render ,(-1,3)))
+        real_res_mesh_id = rmi_render.intersects_first(ray_origins=np.reshape( rays_origin_real, (-1,3) ) , 
+            ray_directions=np.reshape(rays_dir_real ,(-1,3)))
 
-        st_ = time.time()
-
-        tl, br = b_real.limit_bb() 
-        ww = float( br[1]-tl[1] )
-
-        w_idx_real = ((real_res[1] / ww).astype(np.long) + tl[0].numpy()).astype(np.long)
-        h_idx_real = (np.mod( real_res[1], np.full(real_res[1].shape,ww)) + tl[1].numpy()).astype(np.long)
-        h_idx_real[ h_idx_real < 0 ] = -1
-        h_idx_real[ h_idx_real > (self.h-1) ] = -1
-        w_idx_real[ w_idx_real < 0 ] = -1
-        w_idx_real[ w_idx_real > (self.w-1) ] = -1
+        f_real = real_res_mesh_id != -1 
+        f_render = render_res_mesh_id != -1
         
+        
+        render_res_mesh_id = render_res_mesh_id[f_render]
+        h_idx_render = h_idx_render[f_render]
+        w_idx_render = w_idx_render[f_render]
+        
+        real_res_mesh_id = real_res_mesh_id[f_real]
+        h_idx_real = h_idx_real[f_real]
+        w_idx_real = w_idx_real[f_real]
+        
+        # render_res = rmi_render.intersects_location(ray_origins=np.reshape( rays_origin_render, (-1,3) ), 
+        #                     ray_directions=np.reshape(rays_dir_render ,(-1,3)),
+        #                     multiple_hits=True)
+        # real_res = rmi_real.intersects_location(ray_origins=np.reshape( rays_origin_real, (-1,3) ) , 
+        #                             ray_directions=np.reshape(rays_dir_real ,(-1,3)),
+        #                             multiple_hits=False)    
+        # print(f'Time sparse ray traceing: {time.time()-st_}')
+        # print(f'Render RES {render_res[0].shape} Real res {real_res[0].shape}')
+        # st_ = time.time()
+        # tl, br = b_real.limit_bb() 
+        # ww = float( br[1]-tl[1] )
+        # w_idx_real = (((real_res[1] / int(ww/sub)).astype(np.long)) * sub + tl[0].numpy()).astype(np.long)
+        # h_idx_real = ((np.mod( real_res[1], np.full(real_res[1].shape,int(ww/sub))) * sub) +  (tl[1].numpy())).astype(np.long)
+        # try:
+        #     print(f'result rays Height: top {np.min(h_idx_real)} bot {np.max(h_idx_real)}')
+        #     print(f'result rays Width: left {np.min(w_idx_real)} right {np.max(w_idx_real)}')
+        # except:
+        #     pass
+        # # h_idx_real[ h_idx_real < 0 ] = -1
+        # # h_idx_real[ h_idx_real > (self.h-1) ] = -1
+        # # w_idx_real[ w_idx_real < 0 ] = -1
+        # # w_idx_real[ w_idx_real > (self.w-1) ] = -1
 
-        tl, br = b_ren.limit_bb() 
-        ww = float( br[1]-tl[1] )
-        w_idx_ren = ((render_res[1] / ww).astype(np.long) + tl[0].numpy()).astype(np.long)
-        h_idx_ren = (np.mod( render_res[1], np.full(render_res[1].shape,ww)) + tl[1].numpy()).astype(np.long)
-        h_idx_ren[ h_idx_ren < 0 ] = -1
-        h_idx_ren[ h_idx_ren > (self.h-1) ] = -1
-        w_idx_ren[ w_idx_ren < 0 ] = -1
-        w_idx_ren[ w_idx_ren > (self.w-1) ] = -1
+        # tl, br = b_ren.limit_bb() 
+        # ww = float( br[1]-tl[1] )
+        # w_idx_ren = (((render_res[1] / int( ww/sub)).astype(np.long))*sub + tl[0].numpy()).astype(np.long)
+        # h_idx_ren = ((np.mod( render_res[1], np.full(render_res[1].shape,int(ww/sub)))*sub) + tl[1].numpy()).astype(np.long)
+        # # h_idx_ren[ h_idx_ren < 0 ] = -1
+        # # h_idx_ren[ h_idx_ren > (self.h-1) ] = -1
+        # # w_idx_ren[ w_idx_ren < 0 ] = -1
+        # # w_idx_ren[ w_idx_ren > (self.w-1) ] = -1
 
-        # print(f'Indexing ray res {time.time()-st_}')    
         disparity_pixels = np.zeros((self.h,self.w,2))-999
         matches = 0
         i = 0
         idx_pre = np.random.permutation( np.arange(0,real_res[2].shape[0]) ).astype(np.long)
-        # print( str(b_real) )
         while matches < self.max_matches and i < self.max_iterations and i < real_res[2].shape[0]:
             r_id = idx_pre[i]
             mesh_id = int(  real_res[2][r_id] )
@@ -819,13 +847,17 @@ class YCB(Backend):
                     disparity_pixels[_h,_w,0] = h_idx_ren[j] - _h
                     disparity_pixels[_h,_w,1] = w_idx_ren[j] - _w
                     matches += 1
-
             i += 1
-    
-        #print(f'Finished with {matches} matches and within {i} iteartions within: {time.time()-st_}s')
         
+        print(f'Sub matches {matches}, REAL {h_idx_real.shape}, REN {h_idx_ren.shape}')
+        print(f'Rays origin real: {rays_origin_real.shape},  Rays dir: {rays_dir_real.shape}')
+        try:
+            print(f'IDX REAL max{np.max ( h_idx_real[ h_idx_real !=  -1 ] )}')
+            print(f'IDX REAL min{np.min ( h_idx_real[ h_idx_real !=  -1 ] )}')
+        except:
+            pass
         f_2 = disparity_pixels[:,:,0] != -999
-        f_3 = f_1*f_2
+        f_3 = f_2  # *f_1
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
         if matches < 50 or np.sum(f_3) < 10: 
@@ -833,6 +865,8 @@ class YCB(Backend):
             # print(render_res, rays_dir_render2.shape, rays_origin_render2.shape )
             return False
         
+        print(f'Get flow full time without grid: {time.time()-st___}')
+
         u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
 
@@ -875,9 +909,8 @@ class YCB(Backend):
 
     def load_meshes(self):
         st = time.time()
-        p = '/media/scratch1/jonfrey/datasets/YCB_Video_Dataset/models'
         p = self._p_ycb + '/models'
-        cad_models = [str(p) for p in Path(p).rglob('*.obj')]
+        cad_models = [str(p) for p in Path(p).rglob('*scaled.obj')]
         self.mesh = {}
         for pa in cad_models:
             try:
@@ -894,10 +927,12 @@ class YCB(Backend):
         obj_idx = 1
 
         name_to_idx = {}
+        name_to_idx_full = {}
         while 1:
             class_input = class_file.readline()
             if not class_input:
                 break
+            name_to_idx_full[class_input[:-1]] = obj_idx
             if self._obj_list_fil is not None:
                 if obj_idx in self._obj_list_fil:
                     cad_paths.append(
@@ -930,7 +965,7 @@ class YCB(Backend):
             cad_dict[name_to_idx[path.split('/')[-1]]] = np.array(cld)
             input_file.close()
 
-        return cad_dict, name_to_idx
+        return cad_dict, name_to_idx, name_to_idx_full
 
     @ property
     def visu(self):
