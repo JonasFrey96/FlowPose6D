@@ -109,7 +109,7 @@ Vertical, pos down | neg up:
   max = {torch.max(delta_v[mask][:,1])}
   min = {torch.min(delta_v[mask][:,1])}
   mean = {torch.mean(delta_v[mask][:,1])}"""
-        draw.text((10, 60), txt, fill=(255, 255, 255, 255))
+        draw.text((10, 60), txt, fill=(201, 45, 136, 255))
         col = (0, 255, 0)
         grey = (207, 207, 207)
         for u in range(int(delta_v.shape[0] / s) - 2):
@@ -423,6 +423,19 @@ Vertical, pos down | neg up:
         cropped_comp = np.swapaxes( np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=2).astype(np.uint8).T,0,1)
         cropped_comp_img = Image.fromarray(cropped_comp)
         draw = ImageDraw.Draw(cropped_comp_img)
+
+        m = flow_mask != 0
+        txt = f"""Flow in Height:
+  max = {torch.max(u_map[m].type(torch.float32))}
+  min = {torch.min(u_map[m].type(torch.float32))}
+  mean = {torch.mean(u_map[m].type(torch.float32))}
+Flow in Vertical:
+  max = {torch.max(v_map[m].type(torch.float32))}
+  min = {torch.min(v_map[m].type(torch.float32))}
+  mean = {torch.mean(v_map[m].type(torch.float32))}"""
+        draw.text((10, 60), txt, fill=(201, 45, 136, 255))
+
+
         w= 640
         h = 480
         col = (0,255,0)

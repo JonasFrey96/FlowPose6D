@@ -302,10 +302,18 @@ class TrackNet6D(LightningModule):
             self.counter_images_logged += 1
             mask = (flow_mask == True)
             self.visualizer.plot_translations(
-                f'votes_image_plane_{self._mode}_nr_{self.counter_images_logged}',
+                f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
                 self.current_epoch,
                 real_img[0].permute(1, 2, 0).cpu(),
                 delta_v[0, :2, :, :].permute(1, 2, 0).cpu(),
+                mask=mask[0].cpu(),
+                store=True)
+            
+            self.visualizer.plot_translations(
+                f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
+                self.current_epoch,
+                real_img[0].permute(1, 2, 0).cpu(),
+                uv_gt.permute(0,2,3,1)[0].cpu(),
                 mask=mask[0].cpu(),
                 store=True)
 

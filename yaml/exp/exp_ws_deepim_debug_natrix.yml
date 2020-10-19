@@ -31,7 +31,8 @@ model:
   sem_seg: True
 
 loss:
-  weight_semantic_segmentation: 0
+  weight_semantic_segmentation: 0.5
+  weight_flow: 0.5
   weight_pose: 0
   weight_trans: 1
 
