@@ -283,8 +283,8 @@ class TrackNet6D(LightningModule):
             return loss, log_scalars
 
         real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
-        pred_rot_wxyz, pred_trans, pred_points, h_render, render_img_original = batch[18:23]
-        u_map, v_map, flow_mask = batch[23:]
+        pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
+        u_map, v_map, flow_mask = batch[24:]
         data = torch.cat([real_img, render_img], dim=1)
 
         # TODO idx is currently unused !!!!
@@ -299,6 +299,7 @@ class TrackNet6D(LightningModule):
         flow_loss = torch.sum( torch.norm( delta_v[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind  )
         if self.visu_forward:
             self._k += 1
+            self.counter_images_logged += 1
             mask = (flow_mask == True)
             self.visualizer.plot_translations(
                 f'votes_image_plane_{self._mode}_nr_{self.counter_images_logged}',

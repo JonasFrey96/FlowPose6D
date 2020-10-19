@@ -243,7 +243,7 @@ Vertical, pos down | neg up:
         trans: [1,3]
         rot: [3,3]
         """
-        if type(K) is not None: 
+        if K is None: 
             cam_cx = K [0,2]
             cam_cy = K [1,2] 
             cam_fx = K [0,0]
