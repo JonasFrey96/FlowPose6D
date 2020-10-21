@@ -1,6 +1,6 @@
 import sys
 import os
-
+import random
 if __name__ == "__main__":
     # load data
     os.chdir('/home/jonfrey/PLR2')
@@ -419,7 +419,7 @@ Vertical, pos down | neg up:
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
         plt.close()
     
-    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False):
+    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False):
         cropped_comp = np.swapaxes( np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=2).astype(np.uint8).T,0,1)
         cropped_comp_img = Image.fromarray(cropped_comp)
         draw = ImageDraw.Draw(cropped_comp_img)
@@ -435,20 +435,26 @@ Flow in Vertical:
   mean = {torch.mean(v_map[m].type(torch.float32))}"""
         draw.text((10, 60), txt, fill=(201, 45, 136, 255))
 
+        Nc = 20
+        cmap = plt.cm.get_cmap('gist_rainbow', Nc)
+        cmaplist = [cmap(i) for i in range(cmap.N)]
+        
 
-        w= 640
+        w = 640
         h = 480
         col = (0,255,0)
-        for _w in range(0,w,20):
-            for _h in range(0,h,20): 
+        for _w in range(0,w,30):
+            for _h in range(0,h,30): 
 
                 if flow_mask[_h,_w] != 0:
                     try:
                         delta_h = u_map[_h,_w]
                         delta_w = v_map[_h,_w]
-                        
+                        if coloful:
+                            col = random.choice(cmaplist)[:3]
+                            col = (int( col[0]*255 ),int( col[1]*255 ),int( col[2]*255 ))
                         draw.line([(int(_w), int(_h)), (int(_w + w - delta_w ), int( _h - delta_h))],
-                        fill=col, width=1)
+                        fill=col, width=2)
                     except:
                         print('failed')
         if store:
@@ -746,3 +752,4 @@ if __name__ == "__main__":
                            max_images=10,
                            store=True,
                            jupyter=False)
+

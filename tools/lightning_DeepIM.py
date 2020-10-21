@@ -63,6 +63,8 @@ from pixelwise_refiner import PixelwiseRefiner
 
 import torch.autograd.profiler as profiler
 
+from deep_im import flow_to_trafo
+
 
 def get_ref_ite(exp):
     # Hyper parameters that should  be moved to config
@@ -284,7 +286,7 @@ class TrackNet6D(LightningModule):
 
         real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
         pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
-        u_map, v_map, flow_mask = batch[24:]
+        u_map, v_map, flow_mask, bb = batch[24:]
         data = torch.cat([real_img, render_img], dim=1)
 
         # TODO idx is currently unused !!!!
@@ -346,7 +348,25 @@ class TrackNet6D(LightningModule):
                                                 real_img=real_img[0], 
                                                 render_img=render_img[0],
                                                 store=True)
-
+            
+            real_tl, real_br, ren_tl, ren_br = bb 
+            K_ren = torch.from_numpy( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/000001', K=True) )
+            b = 0
+            K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]]  )
+            print(K_real, K_ren)
+            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
+                  real_tl[b], 
+                  ren_br[b], 
+                  ren_tl[b], 
+                  flow_mask[b], 
+                  u_map[b], 
+                  v_map[b], 
+                  K_real, 
+                  K_ren, 
+                  real_d[b][0], 
+                  render_d[b][0], 
+                  h_real[b], 
+                  h_render[b])
 
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)

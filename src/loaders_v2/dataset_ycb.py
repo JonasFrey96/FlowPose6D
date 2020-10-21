@@ -649,7 +649,7 @@ class YCB(Backend):
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
 
         inp = np.uint8( f_3*255 ) 
-        kernel = np.ones((6,6),np.uint8)
+        kernel = np.ones((2,2),np.uint8)
         valid_flow_mask = ( cv2.dilate(inp, kernel, iterations = 1) != 0 )
         valid_flow_mask = valid_flow_mask * f_1
 
