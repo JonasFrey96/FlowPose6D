@@ -232,7 +232,7 @@ Vertical, pos down | neg up:
                             trans=[[0, 0, 0]],
                             rot_mat=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
                             cam_cx=0, cam_cy=0, cam_fx=0, cam_fy=0,
-                            store=False, jupyter=False, w=2, K = None):
+                            store=False, jupyter=False, w=2, K = None, H=None):
         """
         tag := tensorboard tag 
         epoch := tensorboard epoche
@@ -243,11 +243,19 @@ Vertical, pos down | neg up:
         trans: [1,3]
         rot: [3,3]
         """
-        if K is None: 
+        if K is not None: 
             cam_cx = K [0,2]
             cam_cy = K [1,2] 
             cam_fx = K [0,0]
             cam_fy = K [1,1]
+        if H is not None:
+            rot_mat = H[:3,:3]
+            trans = H[:3,3][None,:]
+            if H[3,3] != 1:
+                raise Exception
+            if H[3,0] != 0 or H[3,1] != 0 or H[3,2] != 0:
+                raise Exception
+
             
         if type(rot_mat) == list:
             rot_mat = np.array(rot_mat)

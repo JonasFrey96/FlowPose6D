@@ -76,9 +76,9 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 1
-  number_images_log_test: 1
-  number_images_log_val: 1
+  number_images_log_train: 50
+  number_images_log_test: 50
+  number_images_log_val: 50
   network_input_batch: False
   log_to_file: False
 
@@ -172,7 +172,7 @@ d_train:
     overfitting_nr_idx: 10
     vm_in_dataloader: true
     noise_translation: 0.03
-    noise_rotation: 20
+    noise_rotation: 40
 
     return_same_size_tensors: true
     force_one_object_visible: true

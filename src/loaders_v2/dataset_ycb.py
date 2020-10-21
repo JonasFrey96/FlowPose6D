@@ -393,8 +393,10 @@ class YCB(Backend):
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
         # set inital translation
+        nt = 0.00001
         init_trans = torch.normal(mean=torch.tensor(gt_trans), std=nt)
-
+        init_trans[2] = init_trans[2] + 0.1
+        init_trans[1] = init_trans[1] + 0.1
         # set inital rotaiton
         r1 = R.from_quat( re_quat( copy.copy(gt_rot_wxyz) , 'wxyz') ).as_matrix()
         animate = False

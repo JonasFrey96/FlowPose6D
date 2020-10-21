@@ -17,8 +17,8 @@ from rotations import quat_to_rot
 import pytest
 import copy
 from sklearn.neighbors import KNeighborsClassifier
-
-
+from scipy.spatial.transform import Rotation as R
+from rotations import rot_to_quat
 def knn(ref, query):
     """return indices of ref for each query point. L2 norm
 
@@ -36,7 +36,7 @@ def knn(ref, query):
     return knn
 
 
-def loss_calculation_add(pred_r, pred_t, target, model_points, idx, sym_list):
+def loss_calculation_add(target, model_points, idx, sym_list, pred_r = None, pred_t = None, H= None):
     """ADD loss calculation
 
     Args:
@@ -54,11 +54,14 @@ def loss_calculation_add(pred_r, pred_t, target, model_points, idx, sym_list):
     bs, num_p, _ = target.shape
     num_point_mesh = num_p
 
-    pred_r = pred_r / torch.norm(pred_r, dim=1).view(bs, 1)
-    base = quat_to_rot(pred_r, 'wxyz').unsqueeze(1)
-    base = base.view(-1, 3, 3).cuda().permute(0, 2, 1)  # transposed of R
-
-    pred_t = pred_t.unsqueeze(1)
+    if H is not None:
+        base = H[:,:3,:3].permute(0, 2, 1)
+        pred_t = H[:,:3,3].unsqueeze(1)
+    else:
+        pred_r = pred_r / torch.norm(pred_r, dim=1).view(bs, 1)
+        base = quat_to_rot(pred_r, 'wxyz').unsqueeze(1)
+        base = base.view(-1, 3, 3).permute(0, 2, 1)  # transposed of R
+        pred_t = pred_t.unsqueeze(1)
 
     pred = torch.add(torch.bmm(model_points, base), pred_t)
     tf_model_points = pred.view(target.shape)
@@ -82,8 +85,13 @@ class LossAddS(nn.Module):
         super(LossAddS, self).__init__()
         self.sym_list = sym_list
 
-    def forward(self, pred_r, pred_t, target, model_points, idx):
-        return loss_calculation_add(pred_r, pred_t, target, model_points, idx, self.sym_list)
+    def forward(self, target, model_points, idx, pred_r=None, pred_t=None, H=None):
+        if H is not None:
+            # pred_t = H[:,:3,3]
+            # pred_r = rot_to_quat( H[:,:3,:3], "wxyz" )
+            return loss_calculation_add(target, model_points, idx, self.sym_list, H = H)
+        else:
+            return loss_calculation_add(target, model_points, idx, self.sym_list, pred_r = pred_r, pred_t =pred_t)
 
 
 if __name__ == "__main__":

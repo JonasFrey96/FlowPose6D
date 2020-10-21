@@ -352,22 +352,60 @@ class TrackNet6D(LightningModule):
             real_tl, real_br, ren_tl, ren_br = bb 
             K_ren = torch.from_numpy( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/000001', K=True) )
             b = 0
-            K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]]  )
-            print(K_real, K_ren)
+            K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]], device=self.device )
+            
+            h_real_est = torch.eye(4,device=self.device)
+            h_real_est[:3,:3] = quat_to_rot(pred_rot_wxyz[b][None,:], conv='wxyz', device=self.device)
+            h_real_est[:3,3] = torch.tensor( pred_trans[b] )
+            
             P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
-                  real_tl[b], 
-                  ren_br[b], 
-                  ren_tl[b], 
-                  flow_mask[b], 
-                  u_map[b], 
-                  v_map[b], 
-                  K_real, 
-                  K_ren, 
-                  real_d[b][0], 
-                  render_d[b][0], 
-                  h_real[b], 
-                  h_render[b])
+                real_tl[b], 
+                ren_br[b], 
+                ren_tl[b], 
+                flow_mask[b], 
+                u_map[b], 
+                v_map[b], 
+                K_real, 
+                K_ren, 
+                real_d[b][0], 
+                render_d[b][0], 
+                h_real_est, 
+                h_render[b])
 
+            h_real_new_est =  T_res @ h_real_est # set rotation
+            h_real_new_est[:3,3] = h_real_est[:3,3] + T_res[:3,3]  # set translation
+            print(h_real_new_est , h_real)
+            # plot all estimates: gt, inital, new
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_new_estimate_{self._mode}_nr_{self.counter_images_logged}",
+                                        epoch = self.current_epoch,
+                                        img= real_img_original[b].cpu().numpy(),
+                                        points = copy.deepcopy(model_points[b].cpu().numpy()),
+                                        store = True,
+                                        K = K_real.cpu().numpy(),
+                                        H = h_real_new_est.cpu().numpy() )
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_inital_estimate_{self._mode}_nr_{self.counter_images_logged}",
+                                        epoch = self.current_epoch,
+                                        img= real_img_original[b].cpu().numpy(),
+                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                        store = True,
+                                        K = K_real.cpu().numpy(),
+                                        H = h_real_est.cpu().numpy() )
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_gt_estimate_{self._mode}_nr_{self.counter_images_logged}",
+                                        epoch = self.current_epoch,
+                                        img= real_img_original[b].cpu().numpy(),
+                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                        store = True,
+                                        K = K_real.cpu().numpy(),
+                                        H = h_real[b].cpu().numpy() )
+            p = model_points.shape[1]
+            # mp = torch.ones( (bs,model_points.shape[1],4) , device= model_points.device)
+            # mp[:,:,:3] = model_points
+            target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,p,1)
+            # Compute ADD-S
+            adds_res = self.criterion_adds(target, model_points, idx, H = h_real)
+            
+
+            
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
         loss = w_s * focal_loss + w_f * flow_loss  #dis + w_t * translation_loss

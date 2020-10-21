@@ -110,35 +110,35 @@ def flow_to_trafo(real_br,
     # Grid for upsampled real
     a = float((real_br[0]-real_tl[0])/480)+0.0001
     b = float((real_br[1]-real_tl[1])/640)+0.0001
-    grid_real_h, grid_real_w = torch.from_numpy( np.mgrid[int(real_tl[0]) :int(real_br[0]):a , int(real_tl[1]) :int(real_br[1]):b])
+    grid_real_h, grid_real_w = torch.from_numpy( np.mgrid[int(real_tl[0]) :int(real_br[0]):a , int(real_tl[1]) :int(real_br[1]):b]).to(u_map.device)
     # Grid for upsampled ren
     a = float((ren_br[0]-ren_tl[0])/480)+0.0001
     b = float((ren_br[1]-ren_tl[1])/640)+0.0001
-    grid_ren_h, grid_ren_w = torch.from_numpy( np.mgrid[int(ren_tl[0]) :int(ren_br[0]):a , int(ren_tl[1]) :int(ren_br[1]):b])
+    grid_ren_h, grid_ren_w = torch.from_numpy( np.mgrid[int(ren_tl[0]) :int(ren_br[0]):a , int(ren_tl[1]) :int(ren_br[1]):b]).to(u_map.device)
 
     # Calculate valid depth map for rendered image
-    render_d_ind_h, render_d_ind_w = torch.from_numpy(np.mgrid[0:480 , 0:640])
-    render_d_ind_h = torch.clamp(torch.round((render_d_ind_h - u_map).type(torch.DoubleTensor)) ,0,480).type( torch.long )[flow_mask]
-    render_d_ind_w = torch.clamp(torch.round((render_d_ind_w - v_map).type(torch.DoubleTensor)),0,640).type( torch.long )[flow_mask] 
-    index = render_d_ind_h*640 + render_d_ind_w
+    render_d_ind_h, render_d_ind_w = torch.from_numpy(np.mgrid[0:480 , 0:640]).to(u_map.device)
+    render_d_ind_h = torch.clamp(torch.round((render_d_ind_h - u_map).type(torch.float32)) ,0,480).type( torch.long )[flow_mask]
+    render_d_ind_w = torch.clamp(torch.round((render_d_ind_w - v_map).type(torch.float32)),0,640).type( torch.long )[flow_mask] 
+    index = render_d_ind_h*640 + render_d_ind_w # hacky indexing along two dimensions
     ren_d_masked  = render_d.flatten()[index]
     
     # Project depth map to the pointcloud real
     cam_scale = 10000
     
-    real_pixels = torch.stack( [grid_real_w[flow_mask], grid_real_h[flow_mask], torch.ones(grid_real_h.shape)[flow_mask]], dim=1 )
-    K_inv = torch.inverse(K_real)
-    P_real = K_inv @ real_pixels.T 
+    real_pixels = torch.stack( [grid_real_w[flow_mask], grid_real_h[flow_mask], torch.ones(grid_real_h.shape, device = u_map.device)[flow_mask]], dim=1 )
+    K_inv = torch.inverse(K_real).to(u_map.device)
+    P_real = K_inv.type(real_pixels.dtype) @ real_pixels.T
     P_real = P_real * real_d[flow_mask] / cam_scale
     P_real = P_real.T
     
     # Project depth map to the pointcloud render
-    K_ren_inv = torch.inverse(K_ren)
+    K_ren_inv = torch.inverse(K_ren).to(u_map.device)
     ren_pixels = torch.stack( [grid_ren_w[flow_mask] - v_map[flow_mask], 
                             grid_ren_h[flow_mask] - u_map[flow_mask],
-                            torch.ones(grid_ren_h.shape)[flow_mask]], 
+                            torch.ones(grid_ren_h.shape, device = u_map.device )[flow_mask]], 
                             dim=1 )
-    P_ren = K_ren_inv @ ren_pixels.T 
+    P_ren = K_ren_inv.type(ren_pixels.dtype) @ ren_pixels.T 
     P_ren = P_ren * ren_d_masked / cam_scale
     P_ren = P_ren.T
 
@@ -154,7 +154,7 @@ def flow_to_trafo(real_br,
     P_real_in_center = P_real - h_real[:3,3]
     P_ren_in_center = P_ren - h_render[:3,3]
 
-    m_real = filter_pcd( P_real_in_center)
+    m_real = filter_pcd( P_real_in_center )
     m_ren = filter_pcd( P_ren_in_center )
     m_tot = m_real * m_ren
     
@@ -170,7 +170,7 @@ def flow_to_trafo(real_br,
     T_res = solve_transform( P_real_in_center[None] , P_ren_in_center ) 
     
     # Transform the real points according to calculated transformation
-    P_hr = torch.ones( (P_real_in_center.shape[0],4 ) )
+    P_hr = torch.ones( (P_real_in_center.shape[0],4 ) , device=u_map.device)
     P_hr[:,:3] = P_real_in_center
     P_real_trafo = (torch.inverse( T_res[0].type(torch.float32) ) @ copy.deepcopy(P_hr).T).T [:,:3]
 
