@@ -12,15 +12,15 @@ model:
   df_load: True
   df_refiner: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
   df_pose_estimator: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
-  df_refine: True
+  df_refine: False
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
   df_refine_iterations: 1
-  df_dump_pred_pickle: True
+  df_dump_pred_pickle: False
   inital_pose:
-    mode: "DenseFusionInit" # 'TransNoise' 'RotTransNoise'  'RotNoise'
-    translation_noise_inital: 0.03
-    rot_noise_deg_inital: 5
+    mode: "RotTransNoise" # 'TransNoise' 'RotTransNoise'  'RotNoise'
+    translation_noise_inital: 0.02
+    rot_noise_deg_inital: 30
   mask:
     real_mask: True
     render_mask: True
@@ -28,12 +28,18 @@ model:
     render_depth_mask: True
   sem_seg: True
 
+loss:
+  weight_semantic_segmentation: 0.5
+  weight_flow: 0.5
+  weight_pose: 0
+  weight_trans: 1
+
 epochs: 500
-lr: 1.0e-5
+lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
-    factor: 0.3
+    factor: 0.95
     threshold: 0.02
   interval: "epoch"
   frequency: 1
@@ -45,35 +51,41 @@ vm:
 eval:
   threshold_add: 0.02
 
-training:
+trainer:
+  num_nodes: 1
+  precision: 16
+  auto_lr_find: false
   accumulate_grad_batches: 1
+  fast_dev_run: false
+  limit_train_batches: 500
+  limit_val_batches: 5
+  limit_test_batches: 5
   progress_bar_refresh_rate: 1
+  max_epochs: 100
+  terminate_on_nan: false
+  profiler: false
+  gpus: -1
+  num_sanity_val_steps: 0
+
+training:
   refine_iterations: 1
   refine_iterations_range: 0 # iteareatioons elemen refine_iterations +- refine_iterations_range
-  max_epochs: 1000
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
-  limit_train_batches: 50
-  limit_val_batches: 5
 
 visu:
+  number_images_log_train: 2
   number_images_log_test: 2
   number_images_log_val: 2
-  network_input_batch: True
-  log_to_file: True
+  network_input_batch: False
+  log_to_file: False
 
 early_stopping_cfg:
   patience: 100
 
-decay_margin_start: 0.016
-samples_early_break_epoch: 5000000
-time_early_break_epoch: 10
-samples_early_break_validation: 100000
-time_early_break_validation: 10
-
 loader:
   batch_size: 2
-  num_workers: 10
+  num_workers: 4
   shuffle: True
   pin_memory: True
 
@@ -83,13 +95,7 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
-    - 12
-    - 13
-    - 14
-    - 15
-    - 16
-    - 17
+  obj_list_fil: null #null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
   obj_list_sym:
     - 12
     - 15
@@ -101,18 +107,38 @@ d_test:
     seq_length: 1
     fixed_length: true
     sub_sample: 1
-    mode: "dense_fusion_test" #dense_fusion_test
+    mode: "test" #dense_fusion_test
     add_syn_to_train: false
   noise_cfg:
     status: false
     noise_trans: 0.0
   output_cfg:
+    overfitting_nr_idx: 10
+    vm_in_dataloader: true
+    noise_translation: 0.04
+    noise_rotation: 20
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
     refine: false
     add_depth_image: true
     add_mask_image: true
+    norm_render: false
+    color_jitter_render:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    norm_real: false
+    color_jitter_real:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
     visu:
       status: true
       return_img: true
@@ -123,13 +149,8 @@ d_train:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: # if not null add list with specific elements
-    - 12
-    - 13
-    - 14
-    - 15
-    - 16
-    - 17
+  obj_list_fil: #null # if not null add list with specific elements
+    - 2
   obj_list_sym:
     - 12
     - 15
@@ -142,18 +163,38 @@ d_train:
     no_list_for_sequence_len_one: True
     fixed_length: true
     sub_sample: 1
-    mode: "dense_fusion_train"
+    mode: "train"
     add_syn_to_train: true
   noise_cfg:
     status: false
     noise_trans: 0
   output_cfg:
+    overfitting_nr_idx: 10
+    vm_in_dataloader: true
+    noise_translation: 0.04
+    noise_rotation: 20
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
     refine: false
     add_depth_image: true
     add_mask_image: true
+    norm_render: false
+    color_jitter_render:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
+    norm_real: false
+    color_jitter_real:
+      active: false
+      cfg:
+        - 0.2
+        - 0.2
+        - 0.2
+        - 0.05
     visu:
       status: true
       return_img: true
