@@ -393,23 +393,35 @@ class YCB(Backend):
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
         # set inital translation
-        nt = 0.00001
         init_trans = torch.normal(mean=torch.tensor(gt_trans), std=nt)
-        init_trans[2] = init_trans[2] + 0.1
-        init_trans[1] = init_trans[1] + 0.1
+        init_trans[2] = init_trans[2]
+        init_trans[1] = init_trans[1]
         # set inital rotaiton
         r1 = R.from_quat( re_quat( copy.copy(gt_rot_wxyz) , 'wxyz') ).as_matrix()
         animate = False
+        def rel_h (h1,h2):
+            from pytorch3d.transforms import so3_relative_angle
+            return so3_relative_angle(torch.tensor( h1 ) [:3,:3][None], torch.tensor( h2 ) [:3,:3][None])
+            
         if animate:
             try:
                 self.animation_step += 1
             except:
                 self.animation_step = 0
-            r2 = R.from_euler('zyx', np.array([[0,self.animation_step*5,0]]), degrees=True).as_matrix()
+            r2 = R.from_euler('zyx', np.array([[0,self.animation_step*5,0]]), degrees=True).as_matrix()[0]
         else:
-            r2 = R.from_euler('zyx', np.random.normal(
-                0, nr, (1, 3)), degrees=True).as_matrix()
-        init_rot_mat = r1 @ r2
+            r2 = R.from_euler('zyx', np.random.uniform( -nr, nr, (1, 3) ) , degrees=True).as_matrix()[0]
+            r2 = r2 @ r1
+            c = 0
+            while  abs( float( rel_h(r1, r2)/(2* float( np.math.pi) )* 360) ) > nr:
+                r2 = R.from_euler('zyx', np.random.uniform( -nr, nr, (1, 3) ) , degrees=True).as_matrix()[0]
+                r2 = r2 @ r1
+                c =+ 1
+                if c > 100:
+                    raise Exception
+
+        init_rot_mat = r2[None]
+        
         init_rot_wxyz = torch.tensor( re_quat( R.from_matrix(init_rot_mat).as_quat()[0], 'xyzw') )
         
         # transform points

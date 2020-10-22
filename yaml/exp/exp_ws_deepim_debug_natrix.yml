@@ -76,9 +76,9 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 50
-  number_images_log_test: 50
-  number_images_log_val: 50
+  number_images_log_train: 2
+  number_images_log_test: 2
+  number_images_log_val: 2
   network_input_batch: False
   log_to_file: False
 
@@ -86,8 +86,8 @@ early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 4
-  num_workers: 8
+  batch_size: 2
+  num_workers: 4
   shuffle: True
   pin_memory: True
 
@@ -117,6 +117,8 @@ d_test:
   output_cfg:
     overfitting_nr_idx: 10
     vm_in_dataloader: true
+    noise_translation: 0.04
+    noise_rotation: 20
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -171,16 +173,14 @@ d_train:
   output_cfg:
     overfitting_nr_idx: 10
     vm_in_dataloader: true
-    noise_translation: 0.03
-    noise_rotation: 40
-
+    noise_translation: 0.04
+    noise_rotation: 20
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
     refine: false
     add_depth_image: true
     add_mask_image: true
-
     norm_render: false
     color_jitter_render:
       active: false
