@@ -549,7 +549,7 @@ class YCB(Backend):
             real_img = self._norm_real(real_img)
         
         pred_points = 0
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz, init_trans, pred_points, h_render[0], torch.from_numpy(np.float32( h_real )), img_ren[0], torch.from_numpy( u_cropped_scaled ), torch.from_numpy( v_cropped_scaled), valid_flow_mask_cropped.type(torch.bool), flow[-4:])
+        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz, init_trans, pred_points, h_render[0].type(torch.float32), torch.from_numpy(np.float32( h_real )), img_ren[0], torch.from_numpy( u_cropped_scaled ), torch.from_numpy( v_cropped_scaled), valid_flow_mask_cropped.type(torch.bool), flow[-4:])
     
     def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
         st___ = time.time()
@@ -667,7 +667,21 @@ class YCB(Backend):
         valid_flow_mask = ( cv2.dilate(inp, kernel, iterations = 1) != 0 )
         valid_flow_mask = valid_flow_mask * f_1
 
-        return u_map, v_map, valid_flow_mask, b_real.tl, b_real.br, b_ren.tl, b_ren.br 
+        real_tl = np.zeros( (2) )
+        real_tl[0] = int(b_real.tl[0])
+        real_tl[1] = int(b_real.tl[1])
+        real_br = np.zeros( (2) )
+        real_br[0] = int(b_real.br[0])
+        real_br[1] = int(b_real.br[1])
+        ren_tl = np.zeros( (2) )
+        ren_tl[0] = int(b_ren.tl[0])
+        ren_tl[1] = int(b_ren.tl[1])
+        ren_br = np.zeros( (2) )
+        ren_br[0] = int( b_ren.br[0] )
+        ren_br[1] = int( b_ren.br[1] )
+        
+
+        return u_map, v_map, valid_flow_mask, torch.tensor( real_tl, dtype=torch.int32) , torch.tensor( real_br, dtype=torch.int32) , torch.tensor( ren_tl, dtype=torch.int32) , torch.tensor( ren_br, dtype=torch.int32 ) 
 
     def get_desig(self, path):
         desig = []

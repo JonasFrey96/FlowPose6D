@@ -265,7 +265,10 @@ class TrackNet6D(LightningModule):
         if self.visualizer is None:
             self.visualizer = Visualizer(self.exp['model_path'] +
                                          '/visu/', self.logger.experiment)
-
+        bls = list( batch )
+        for j, e in enumerate( bls ) : 
+            if type(e) is torch.Tensor:
+                anal_tensor( e, f'{j}', print_on_error = True)
         # unpack batch
         #points, choose, img, target, model_points, idx = batch[0:6]
         #depth_img, label, real_img_original, cam = batch[6:10]
@@ -295,7 +298,6 @@ class TrackNet6D(LightningModule):
 
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
-
         ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
         uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
         flow_loss = torch.sum( torch.norm( delta_v[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind  )
@@ -309,28 +311,26 @@ class TrackNet6D(LightningModule):
             
             h_real_est = torch.eye(4,device=self.device)
             h_real_est[:3,:3] = quat_to_rot(pred_rot_wxyz[b][None,:], conv='wxyz', device=self.device)
-            h_real_est[:3,3] = torch.tensor( pred_trans[b] )
+            h_real_est[:3,3] = torch.tensor( pred_trans[b] ,device=self.device )
             
             typ = u_map.dtype
         
-            print(  real_tl[b], real_br[b], real_tl[b], real_br[b])
             
             anal_tensor( real_br, 'real_br', print_on_error = True)
             anal_tensor( real_tl, 'real_tl', print_on_error = True)
-
             P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
-                real_tl[b], 
-                ren_br[b], 
-                ren_tl[b], 
-                flow_mask[b], 
-                u_map[b].type( typ ), 
-                v_map[b].type( typ ), 
-                K_real.type( typ ), 
-                K_ren.type( typ ), 
-                real_d[b][0].type( typ ), 
-                render_d[b][0].type( typ ), 
-                h_real_est.type( typ ), 
-                h_render[b].type( typ ))
+                copy.deepcopy(real_tl[b]), 
+                copy.deepcopy(ren_br[b]), 
+                copy.deepcopy(ren_tl[b]), 
+                copy.deepcopy(flow_mask[b]), 
+                copy.deepcopy(u_map[b].type( typ )), 
+                copy.deepcopy(v_map[b].type( typ )), 
+                copy.deepcopy(K_real.type( typ )), 
+                copy.deepcopy(K_ren.type( typ )), 
+                copy.deepcopy(real_d[b][0].type( typ )), 
+                copy.deepcopy(render_d[b][0].type( typ )), 
+                copy.deepcopy(h_real_est.type( typ )), 
+                copy.deepcopy(h_render[b].type( typ )))
 
             
 
@@ -354,6 +354,21 @@ class TrackNet6D(LightningModule):
                 render_d[b][0].type( typ ), 
                 h_real_est.type( typ ), 
                 h_render[b].type( typ ))
+            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
+                copy.deepcopy(real_tl[b]), 
+                copy.deepcopy(ren_br[b]), 
+                copy.deepcopy(ren_tl[b]), 
+                copy.deepcopy(flow_mask[b]), 
+                torch.zeros( delta_v[b, 0, :, :].shape, device= self.device), 
+                torch.zeros( delta_v[b, 1, :, :].shape, device= self.device), 
+                copy.deepcopy(K_real.type( typ )), 
+                copy.deepcopy(K_ren.type( typ )), 
+                copy.deepcopy(real_d[b][0].type( typ )), 
+                copy.deepcopy(render_d[b][0].type( typ )), 
+                copy.deepcopy(h_real_est.type( typ )), 
+                copy.deepcopy(h_render[b].type( typ )))
+
+
             # if anal_tensor( T_res, 'T_res Pred Flow'):
             #     raise Exception('T_res Pred Flow contains inf or nan')
 

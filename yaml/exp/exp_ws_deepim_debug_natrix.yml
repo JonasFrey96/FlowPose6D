@@ -37,7 +37,7 @@ loss:
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-3
+lr: 1.0e-6
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -76,17 +76,18 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 2
-  number_images_log_test: 2
-  number_images_log_val: 2
+  number_images_log_train: 0
+  number_images_log_test: 0
+  number_images_log_val: 0
   network_input_batch: False
   log_to_file: False
+  always_calculate: True
 
 early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 2
+  batch_size: 1
   num_workers: 4
   shuffle: True
   pin_memory: True

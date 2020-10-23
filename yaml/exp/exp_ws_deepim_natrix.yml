@@ -35,7 +35,7 @@ loss:
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-3
+lr: 1.0e-7
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -53,7 +53,7 @@ eval:
 
 trainer:
   num_nodes: 1
-  precision: 16
+  precision: 32
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
@@ -64,7 +64,7 @@ trainer:
   max_epochs: 100
   terminate_on_nan: false
   profiler: false
-  gpus: -1
+  gpus: 1
   num_sanity_val_steps: 0
 
 training:
