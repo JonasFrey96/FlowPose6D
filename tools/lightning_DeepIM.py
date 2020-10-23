@@ -54,7 +54,7 @@ from visu import Visualizer
 from helper import re_quat, flatten_dict
 from helper import get_bb_from_depth, get_bb_real_target
 from deep_im import DeepIM, ViewpointManager
-from helper import BoundingBox
+from helper import BoundingBox, anal_tensor
 from helper import get_delta_t_in_euclidean, compute_auc
 from helper import backproject_points_batch, backproject_points, backproject_point
 from deep_im import LossAddS
@@ -299,6 +299,66 @@ class TrackNet6D(LightningModule):
         ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
         uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
         flow_loss = torch.sum( torch.norm( delta_v[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind  )
+        
+        if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False): 
+            real_tl, real_br, ren_tl, ren_br = bb 
+            K_ren = torch.tensor( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
+
+            b = 0
+            K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]], device=self.device )
+            
+            h_real_est = torch.eye(4,device=self.device)
+            h_real_est[:3,:3] = quat_to_rot(pred_rot_wxyz[b][None,:], conv='wxyz', device=self.device)
+            h_real_est[:3,3] = torch.tensor( pred_trans[b] )
+            
+            typ = u_map.dtype
+        
+            print(  real_tl[b], real_br[b], real_tl[b], real_br[b])
+            
+            anal_tensor( real_br, 'real_br', print_on_error = True)
+            anal_tensor( real_tl, 'real_tl', print_on_error = True)
+
+            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
+                real_tl[b], 
+                ren_br[b], 
+                ren_tl[b], 
+                flow_mask[b], 
+                u_map[b].type( typ ), 
+                v_map[b].type( typ ), 
+                K_real.type( typ ), 
+                K_ren.type( typ ), 
+                real_d[b][0].type( typ ), 
+                render_d[b][0].type( typ ), 
+                h_real_est.type( typ ), 
+                h_render[b].type( typ ))
+
+            
+
+            if anal_tensor( T_res, 'T_res GT Flow', print_on_error = True):
+                raise Exception('T_res GT Flow contains inf or nan')
+
+            
+            h_real_new_est =  T_res @ h_render[0].type(typ) # set rotation
+            typ = delta_v[b, 0, :, :].dtype
+             
+            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
+                real_tl[b],
+                ren_br[b], 
+                ren_tl[b], 
+                flow_mask[b], 
+                delta_v[b, 0, :, :].type( typ ), 
+                delta_v[b, 1, :, :].type( typ ), 
+                K_real.type( typ ), 
+                K_ren.type( typ ), 
+                real_d[b][0].type( typ ), 
+                render_d[b][0].type( typ ), 
+                h_real_est.type( typ ), 
+                h_render[b].type( typ ))
+            # if anal_tensor( T_res, 'T_res Pred Flow'):
+            #     raise Exception('T_res Pred Flow contains inf or nan')
+
+            h_real_new_est_pred_flow =  T_res @ h_render[0] # set rotation
+        
         if self.visu_forward:
             self._k += 1
             self.counter_images_logged += 1
@@ -348,50 +408,6 @@ class TrackNet6D(LightningModule):
                                                 real_img=real_img[0], 
                                                 render_img=render_img[0],
                                                 store=True)
-            
-            real_tl, real_br, ren_tl, ren_br = bb 
-            K_ren = torch.tensor( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
-
-            b = 0
-            K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]], device=self.device )
-            
-            h_real_est = torch.eye(4,device=self.device)
-            h_real_est[:3,:3] = quat_to_rot(pred_rot_wxyz[b][None,:], conv='wxyz', device=self.device)
-            h_real_est[:3,3] = torch.tensor( pred_trans[b] )
-            
-            typ = u_map.dtype
-            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b].type( typ ), 
-                real_tl[b].type( typ ), 
-                ren_br[b].type( typ ), 
-                ren_tl[b].type( typ ), 
-                flow_mask[b], 
-                u_map[b].type( typ ), 
-                v_map[b].type( typ ), 
-                K_real.type( typ ), 
-                K_ren.type( typ ), 
-                real_d[b][0].type( typ ), 
-                render_d[b][0].type( typ ), 
-                h_real_est.type( typ ), 
-                h_render[b].type( typ ))
-
-            h_real_new_est =  T_res @ h_render[0].type(typ) # set rotation
-            typ = delta_v[b, 0, :, :].dtype
-             
-            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b].type( typ ), 
-                real_tl[b].type( typ ), 
-                ren_br[b].type( typ ), 
-                ren_tl[b].type( typ ), 
-                flow_mask[b], 
-                delta_v[b, 0, :, :].type( typ ), 
-                delta_v[b, 1, :, :].type( typ ), 
-                K_real.type( typ ), 
-                K_ren.type( typ ), 
-                real_d[b][0].type( typ ), 
-                render_d[b][0].type( typ ), 
-                h_real_est.type( typ ), 
-                h_render[b].type( typ ))
-
-            h_real_new_est_pred_flow =  T_res @ h_render[0] # set rotation
             
             self.visualizer.plot_estimated_pose(    tag = f"Pose_new_estimate_GT_FLOW_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
@@ -1014,14 +1030,14 @@ if __name__ == "__main__":
         checkpoint = torch.load(
             exp['checkpoint_load'], map_location=lambda storage, loc: storage)
         model.load_state_dict(checkpoint['state_dict'])
-
+    print("START START")
     with torch.autograd.set_detect_anomaly(True):
+        # early_stop_callback=early_stop_callback,
         trainer = Trainer(**exp['trainer'],
-        checkpoint_callback=checkpoint_callback,
-        early_stop_callback=early_stop_callback,
-        default_root_dir=exp['model_path'])
+            checkpoint_callback=checkpoint_callback,
+            default_root_dir=exp['model_path'])
 
-
+        print( 'try', exp.get('model_mode', 'fit') )
         if exp.get('model_mode', 'fit') == 'fit':
             # lr_finder = trainer.lr_find(
             #     model, min_lr=0.0000001, max_lr=0.001, num_training=50, early_stop_threshold=100)
@@ -1029,8 +1045,9 @@ if __name__ == "__main__":
             # lr_finder.suggestion()
             # print('LR FInder suggestion', lr_finder.suggestion())
             # print(lr_finder.results)
+            print('Fit Start')
             trainer.fit(model)
-            print()
+            print('FIT Done Completly')
         elif exp.get('model_mode', 'fit') == 'test':
             trainer.test(model)
             if exp.get('conv_test2df', False):

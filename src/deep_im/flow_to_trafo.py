@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import copy
+from helper import anal_tensor
+
 def solve_transform(keypoints, gt_keypoints):
     """
     keypoints: N x K x 3
@@ -46,7 +48,7 @@ def filter_pcd_given_depthmap(pcd, depth, scal= 10000):
     val_d = depth[ m1 ]
     mean = torch.mean(val_d)
     new_d = depth - mean
-    tol = 0.25
+    tol = 0.45
     m2 = torch.abs( new_d/scal ) < tol 
     return m1 * m2
     
@@ -109,10 +111,12 @@ def flow_to_trafo(real_br,
       The output rotation T_res is defined in the Camera coordinate frame. 
       Therfore premultiply the T_Res with h_render to get the new h_real_new !!!
     """
+    anal_tensor( real_br, 'real_br', print_on_error = True)
+    anal_tensor( real_tl, 'real_tl', print_on_error = True)
 
     # Grid for upsampled real
-    a = float((real_br[0]-real_tl[0])/480)+0.000001
-    b = float((real_br[1]-real_tl[1])/640)+0.000001
+    a = float((real_br[0]-real_tl[0])/480)*1.0000001
+    b = float((real_br[1]-real_tl[1])/640)*1.0000001
 
     grid_real_h, grid_real_w = torch.from_numpy( np.mgrid[int(real_tl[0]) :int(real_br[0]):a , int(real_tl[1]) :int(real_br[1]):b]).to(u_map.device)
     c = 0
@@ -130,8 +134,8 @@ def flow_to_trafo(real_br,
 
 
     # Grid for upsampled ren
-    a = float((ren_br[0]-ren_tl[0])/480)+0.000001
-    b = float((ren_br[1]-ren_tl[1])/640)+0.000001
+    a = float((ren_br[0]-ren_tl[0])/480)*1.0000001
+    b = float((ren_br[1]-ren_tl[1])/640)*1.0000001
     c = 0
     grid_ren_h, grid_ren_w = torch.from_numpy( np.mgrid[int(ren_tl[0]) :int(ren_br[0]):a , int(ren_tl[1]) :int(ren_br[1]):b]).to(u_map.device)
     while grid_ren_h.shape[0] != 480:
@@ -153,7 +157,19 @@ def flow_to_trafo(real_br,
     
     # Project depth map to the pointcloud real
     cam_scale = 10000
+
+    anal_tensor( flow_mask, 'flow_mask')
+    anal_tensor( grid_real_w, 'grid_real_w')
+    anal_tensor( grid_real_h, 'grid_real_h')
+    anal_tensor( u_map, 'u_map')
     
+    if grid_real_w.shape[0] != flow_mask.shape[0] or grid_real_w.shape[1] != flow_mask.shape[1]:
+        print('ERRRORRR Shapee REAL FLOW W')
+    
+    
+    if grid_real_h.shape[0] != flow_mask.shape[0] or grid_real_h.shape[1] != flow_mask.shape[1]:
+        print('ERRRORRR Shapee REAL FLOW H')
+        
     real_pixels = torch.stack( [grid_real_w[flow_mask], grid_real_h[flow_mask], torch.ones(grid_real_h.shape, device = u_map.device,  dtype= u_map.dtype)[flow_mask]], dim=1 ).type(u_map.dtype)
     K_inv = torch.inverse(K_real.type(torch.float32)).to(u_map.device).type(u_map.dtype)
     P_real = K_inv @ real_pixels.T
@@ -174,9 +190,17 @@ def flow_to_trafo(real_br,
     m_ren_depth = filter_pcd_given_depthmap(P_ren, render_d[flow_mask])
     m_real_depth = filter_pcd_given_depthmap(P_real, real_d[flow_mask])
     m_total =  m_ren_depth * m_real_depth
+    
+    min_points = 20
+    if torch.sum(m_total) < min_points:
+        print('Violated filter pcd_given_depthmap min points constrain in flow_to_trafo')
+        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype)
 
     P_ren = P_ren[m_total] 
     P_real = P_real[m_total]
+    # anal_tensor(  P_ren, 'P_ren m_total masked')
+
+
 
     # Do not transfrom to center coordinate system
     P_real_in_center = P_real                      
@@ -185,15 +209,40 @@ def flow_to_trafo(real_br,
     m_real = filter_pcd( P_real_in_center )
     m_ren = filter_pcd( P_ren_in_center )
     m_tot = m_real * m_ren
-    
+    if torch.sum(m_tot) < min_points:
+        print('Violated filter pcd min points constrain in flow_to_trafo')
+        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype)
+
     P_real_in_center = P_real_in_center[m_tot[:,0]]
     P_ren_in_center = P_ren_in_center[m_tot[:,0]]
+    # anal_tensor(  P_real_in_center, 'P_real_in_center m_tot masked')
+
     # Max mean deviation
     m_new = filter_pcd_cor(P_real_in_center, P_ren_in_center)
+    
+    if torch.sum(m_new) < min_points:
+        print('Violated filter pcd_cor min points constrain in flow_to_trafo')
+        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype)
+
     P_real_in_center = P_real_in_center[m_new]
     P_ren_in_center = P_ren_in_center[m_new]
 
+    
+    # if ( anal_tensor(  P_real_in_center, 'P_real_in_center') or
+    #     anal_tensor(  P_ren_in_center, 'P_ren_in_center') or
+    #     anal_tensor(  u_map, 'U_map') ):
+
+    #     anal_tensor(  K_ren_inv , 'K_ren_inv ')
+    #     anal_tensor(  ren_pixels , 'ren_pixels ')
+    #     anal_tensor(  real_pixels , 'real_pixels ')
+    #     raise Exception('ERROR in flow to trafo')
+    #
     # Get transformation
+    pts_trafo = min( P_real_in_center.shape[0], 1000 )
+    idx = torch.randperm( P_real_in_center.shape[0] )[0:pts_trafo]
+    P_real_in_center = P_real_in_center[idx]
+    P_ren_in_center = P_ren_in_center[idx]
+
     T_res = solve_transform( P_real_in_center[None].type(torch.float64 ) , P_ren_in_center.type(torch.float64 ) ).type(u_map.dtype )
     
     # Transform the real points according to calculated transformation

@@ -1,4 +1,4 @@
-import yagmail
+# import yagmail
 from sklearn.neighbors import NearestNeighbors
 import yaml
 import numpy as np
@@ -179,17 +179,30 @@ def re_quat(q, input_format):
         q[3] = v0
         return q
 
-
+# check if Tres is valid
+def anal_tensor(T, name, print_on_error = False):
+    if torch.any( torch.isnan(T) ) or torch.any( torch.isinf(T) ) and print_on_error:
+        print( f'{name} Analyze Tensor {name}')
+        print( f'       Shape  : {T.shape}')
+        print( f'       Min    : {torch.min(T)}')
+        print( f'       Max    : {torch.max(T)}')
+        print( f'       NAN    : {torch.any( torch.isnan(T) ) }')
+        print( f'       INF    : {torch.any( torch.isinf(T) )}')
+        print( f'       Device : {T.device}')
+        print( f'       DType  : {T.dtype}')
+    return torch.any( torch.isnan(T) ) or torch.any( torch.isinf(T) )
+    
 def send_email(text):
-    yag = yagmail.SMTP('trackthisplr', "TrackThis")
-    contents = [
-        "Run is finished!",
-        text
-    ]
-    yag.send('jonfrey@student.ethz.ch',
-             'PLR - TrackThis - Lagopus', contents)
-    yag.send('yavyas@student.ethz.ch',
-             'PLR - TrackThis - Lagopus', contents)
+    pass
+    # yag = yagmail.SMTP('trackthisplr', "TrackThis")
+    # contents = [
+    #     "Run is finished!",
+    #     text
+    # ]
+    # yag.send('jonfrey@student.ethz.ch',
+    #          'PLR - TrackThis - Lagopus', contents)
+    # yag.send('yavyas@student.ethz.ch',
+    #          'PLR - TrackThis - Lagopus', contents)
 
 
 def rotation_angle(q, device):

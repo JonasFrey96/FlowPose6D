@@ -14,7 +14,6 @@ import torch.nn as nn
 import random
 import torch.backends.cudnn as cudnn
 from rotations import quat_to_rot
-import pytest
 import copy
 from sklearn.neighbors import KNeighborsClassifier
 from scipy.spatial.transform import Rotation as R

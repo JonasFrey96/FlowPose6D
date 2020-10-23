@@ -75,11 +75,20 @@ python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_yash.yml
 cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml
 
 #debug
-cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leonhard.yml
+cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml
+
+bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=25000]" ~/PLR2/scripts/lightning.sh
 
 bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=25000]" ~/PLR2/scripts/lightning.sh
 
 
+
+# Interactive with good GPU:
+bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=25000]" bash
+cd ~/PLR3 && /cluster/home/jonfrey/miniconda3/envs/track3/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml
+
+# Final sub:
+bsub -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=25000]" ./scripts/leonhard/submit.sh --exp=yaml/exp/exp/exp1.yml --env=yaml/env/env_leonhard_jonas.yml 
 
 ```
 
