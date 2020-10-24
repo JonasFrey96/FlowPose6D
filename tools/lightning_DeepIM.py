@@ -378,14 +378,7 @@ class TrackNet6D(LightningModule):
             self._k += 1
             self.counter_images_logged += 1
             mask = (flow_mask == True)
-            self.visualizer.plot_translations(
-                tag = f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
-                epoch = self.current_epoch,
-                img = real_img[0].permute(1, 2, 0).cpu(),
-                delta_v = delta_v[0, :2, :, :].permute(1, 2, 0).cpu(),
-                mask=mask[0].cpu(),
-                store=True,
-                method= 'right')
+
             
             self.visualizer.plot_translations(
                 tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
@@ -395,23 +388,32 @@ class TrackNet6D(LightningModule):
                 mask=mask[0].cpu(),
                 store=True,
                 method= 'left')
+            self.visualizer.plot_translations(
+                tag = f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
+                epoch = self.current_epoch,
+                img = real_img[0].permute(1, 2, 0).cpu(),
+                delta_v = delta_v[0, :2, :, :].permute(1, 2, 0).cpu(),
+                mask=mask[0].cpu(),
+                store=True,
+                method= 'right')
 
+                
             seg_max = p_label.argmax(dim=1)
-            self.visualizer.plot_segmentation(tag=f'gt_segmentation_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_segmentation(tag=f'_',
                                                 epoch=self.current_epoch,
                                                 label=gt_label_cropped[0].cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='left')
             
-            self.visualizer.plot_segmentation(tag=f'predicted_segmentation_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 label=seg_max[0].cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='right')
     
-            self.visualizer.plot_corrospondence(tag=f'gt_flow_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_corrospondence(tag=f'_',
                                                 epoch=self.current_epoch,
                                                 u_map=u_map[0], 
                                                 v_map=v_map[0], 
@@ -420,7 +422,7 @@ class TrackNet6D(LightningModule):
                                                 render_img=render_img[0],
                                                 store=True,
                                                 method='left')
-            self.visualizer.plot_corrospondence(tag=f'predicted_flow_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 u_map= delta_v[0,0,:,:], 
                                                 v_map= delta_v[0,1,:,:], 
@@ -430,7 +432,7 @@ class TrackNet6D(LightningModule):
                                                 store=True,
                                                 method='right')
             
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_new_estimate_GT_FLOW_{self._mode}_nr_{self.counter_images_logged}",
+            self.visualizer.plot_estimated_pose(    tag = f"_",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points = copy.deepcopy(model_points[b].cpu().numpy()),
@@ -438,7 +440,7 @@ class TrackNet6D(LightningModule):
                                         K = K_real.cpu().numpy(),
                                         H = h_real_new_est.cpu().numpy(),
                                         method='left')
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_new_estimate_PRED_FLOW_{self._mode}_nr_{self.counter_images_logged}",
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow_trafo, right pred_flow_trafo)_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points = copy.deepcopy(model_points[b].cpu().numpy()),
@@ -447,23 +449,43 @@ class TrackNet6D(LightningModule):
                                         H = h_real_new_est_pred_flow.detach().cpu().numpy(),
                                         method='right')
 
-
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_inital_estimate_{self._mode}_nr_{self.counter_images_logged}",
+ 
+            self.visualizer.plot_estimated_pose(    tag = f"_",
+                                        epoch = self.current_epoch,
+                                        img= real_img_original[b].cpu().numpy(),
+                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                        store = True,
+                                        K = K_real.cpu().numpy(),
+                                        H = h_real[b].cpu().numpy(), 
+                                      method='left' )
+            self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_pose, right pred_flow_trafo)_{self._mode}_nr_{self.counter_images_logged}",
+                                        epoch = self.current_epoch,
+                                        img= real_img_original[b].cpu().numpy(),
+                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                        store = True,
+                                        K = K_real.cpu().numpy(),
+                                        H = h_real_new_est_pred_flow.detach().cpu().numpy(),
+                                        method='right')
+ 
+ 
+ 
+            self.visualizer.plot_estimated_pose(    tag = f"_",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
                                         H = h_real_est.cpu().numpy(), 
-                                        method='right' )
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_gt_estimate_{self._mode}_nr_{self.counter_images_logged}",
+                                        method='left' )
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left input_pose, right pred_flow_trafo)_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real[b].detach().cpu().numpy(),
-                                        method='left')
+                                        H = h_real_new_est_pred_flow.detach().cpu().numpy(),
+                                        method='right')
+
             p = model_points.shape[1]
 
             target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,p,1)

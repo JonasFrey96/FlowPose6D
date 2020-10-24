@@ -132,8 +132,8 @@ def flow_to_trafo(real_br,
     render_d_ind_h = torch.arange(0 ,480 , 1, device=u_map.device)[:,None].repeat(1,640)
     render_d_ind_w= torch.arange(0 ,640 , 1, device=u_map.device)[None,:].repeat(480,1)
 
-    render_d_ind_h = torch.clamp(torch.round((render_d_ind_h - u_map).type(torch.float32)) ,0,480).type( torch.long )[flow_mask]
-    render_d_ind_w = torch.clamp(torch.round((render_d_ind_w - v_map).type(torch.float32)),0,640).type( torch.long )[flow_mask] 
+    render_d_ind_h = torch.clamp(torch.round((render_d_ind_h - u_map).type(torch.float32)) ,0,479).type( torch.long )[flow_mask]
+    render_d_ind_w = torch.clamp(torch.round((render_d_ind_w - v_map).type(torch.float32)),0,639).type( torch.long )[flow_mask] 
     index = render_d_ind_h*640 + render_d_ind_w # hacky indexing along two dimensions
     ren_d_masked  = render_d.flatten()[index]
     
