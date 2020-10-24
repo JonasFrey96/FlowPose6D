@@ -300,7 +300,7 @@ class TrackNet6D(LightningModule):
             p_label, gt_label_cropped)
         ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
         uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
-        flow_loss = torch.sum( torch.norm( delta_v[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind  )
+        flow_loss = torch.sum( torch.norm( delta_v[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
         
         if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False): 
             real_tl, real_br, ren_tl, ren_br = bb 
@@ -379,33 +379,37 @@ class TrackNet6D(LightningModule):
             self.counter_images_logged += 1
             mask = (flow_mask == True)
             self.visualizer.plot_translations(
-                f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
-                self.current_epoch,
-                real_img[0].permute(1, 2, 0).cpu(),
-                delta_v[0, :2, :, :].permute(1, 2, 0).cpu(),
+                tag = f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
+                epoch = self.current_epoch,
+                img = real_img[0].permute(1, 2, 0).cpu(),
+                delta_v = delta_v[0, :2, :, :].permute(1, 2, 0).cpu(),
                 mask=mask[0].cpu(),
-                store=True)
+                store=True,
+                method= 'right')
             
             self.visualizer.plot_translations(
-                f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
-                self.current_epoch,
-                real_img[0].permute(1, 2, 0).cpu(),
-                uv_gt.permute(0,2,3,1)[0].cpu(),
+                tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
+                epoch = self.current_epoch,
+                img = real_img[0].permute(1, 2, 0).cpu(),
+                delta_v = uv_gt.permute(0,2,3,1)[0].cpu(),
                 mask=mask[0].cpu(),
-                store=True)
+                store=True,
+                method= 'left')
 
             seg_max = p_label.argmax(dim=1)
             self.visualizer.plot_segmentation(tag=f'gt_segmentation_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 label=gt_label_cropped[0].cpu(
                                                 ).numpy(),
-                                                store=True)
+                                                store=True,
+                                                method='left')
             
             self.visualizer.plot_segmentation(tag=f'predicted_segmentation_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 label=seg_max[0].cpu(
                                                 ).numpy(),
-                                                store=True)
+                                                store=True,
+                                                method='right')
     
             self.visualizer.plot_corrospondence(tag=f'gt_flow_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
@@ -414,7 +418,8 @@ class TrackNet6D(LightningModule):
                                                 flow_mask=flow_mask[0], 
                                                 real_img=real_img[0], 
                                                 render_img=render_img[0],
-                                                store=True)
+                                                store=True,
+                                                method='left')
             self.visualizer.plot_corrospondence(tag=f'predicted_flow_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
                                                 u_map= delta_v[0,0,:,:], 
@@ -422,7 +427,8 @@ class TrackNet6D(LightningModule):
                                                 flow_mask=flow_mask[0], 
                                                 real_img=real_img[0], 
                                                 render_img=render_img[0],
-                                                store=True)
+                                                store=True,
+                                                method='right')
             
             self.visualizer.plot_estimated_pose(    tag = f"Pose_new_estimate_GT_FLOW_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
@@ -430,14 +436,16 @@ class TrackNet6D(LightningModule):
                                         points = copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_new_est.cpu().numpy() )
+                                        H = h_real_new_est.cpu().numpy(),
+                                        method='left')
             self.visualizer.plot_estimated_pose(    tag = f"Pose_new_estimate_PRED_FLOW_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points = copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_new_est_pred_flow.detach().cpu().numpy() )
+                                        H = h_real_new_est_pred_flow.detach().cpu().numpy(),
+                                        method='right')
 
 
             self.visualizer.plot_estimated_pose(    tag = f"Pose_inital_estimate_{self._mode}_nr_{self.counter_images_logged}",
@@ -446,14 +454,16 @@ class TrackNet6D(LightningModule):
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_est.cpu().numpy() )
+                                        H = h_real_est.cpu().numpy(), 
+                                        method='right' )
             self.visualizer.plot_estimated_pose(    tag = f"Pose_gt_estimate_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real[b].detach().cpu().numpy() )
+                                        H = h_real[b].detach().cpu().numpy(),
+                                        method='left')
             p = model_points.shape[1]
 
             target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,p,1)

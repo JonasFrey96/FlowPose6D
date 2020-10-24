@@ -31,13 +31,13 @@ model:
   sem_seg: True
 
 loss:
-  weight_semantic_segmentation: 0.5
-  weight_flow: 0.5
+  weight_semantic_segmentation: 1
+  weight_flow: 1
   weight_pose: 0
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-6
+lr: 1.0e-4
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -76,19 +76,19 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 0
-  number_images_log_test: 0
-  number_images_log_val: 0
+  number_images_log_train: 5
+  number_images_log_test: 5
+  number_images_log_val: 5
   network_input_batch: False
   log_to_file: False
-  always_calculate: True
+  always_calculate: False
 
 early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 1
-  num_workers: 4
+  batch_size: 4
+  num_workers: 8
   shuffle: True
   pin_memory: True
 

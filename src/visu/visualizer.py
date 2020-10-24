@@ -60,6 +60,38 @@ def get_img_from_fig(fig, dpi=180):
     return img
 
 
+# if useing multiplot decorater make sure to catch if method is def not to plot
+def multiplot(func):
+    def wrap(*args, **kwargs):
+        if kwargs.get('method', 'def') == 'def':
+            return func(*args,**kwargs)
+        
+        elif kwargs.get('method', 'def') == 'left':
+            res = func(*args,**kwargs)
+            args[0].storage_left = res
+            
+        elif kwargs.get('method', 'def') == 'right':
+            res = func(*args,**kwargs)
+            args[0].storage_right = res
+        if args[0].storage_right is not None and args[0].storage_left is not None:
+            s = args[0].storage_right.shape
+            img_f = np.zeros( (int(s[0]),int(s[1]*2), s[2]), dtype=np.uint8 )
+            img_f[:,:s[1]] = args[0].storage_right
+            img_f[:,s[1]:] = args[0].storage_left
+            args[0].storage_left = None
+            args[0].storage_right = None
+            if kwargs.get('store', True):
+                save_image(img_f, tag=str(kwargs.get('epoch', 'Epoch_Is_Not_Defined_By_Pos_Arg')) + '_' + kwargs.get('tag', 'Tag_Is_Not_Defined_By_Pos_Arg') , p_store=args[0].p_visu)
+
+            if args[0].writer is not None:
+                args[0].writer.add_image(kwargs.get('tag', 'Tag_Is_Not_Defined_By_Pos_Arg') , 
+                    img_f.astype(np.uint8), 
+                    global_step=kwargs.get('epoch', 'Epoch_Is_Not_Defined_By_Pos_Arg'), 
+                    dataformats='HWC')
+
+        return func(*args,**kwargs)
+    return wrap
+
 class Visualizer():
     def __init__(self, p_visu, writer=None):
         if p_visu[-1] != '/':
@@ -70,6 +102,10 @@ class Visualizer():
         if not os.path.exists(self.p_visu):
             os.makedirs(self.p_visu)
 
+        # for mutliplot decorator 
+        self.storage_left = None
+        self.storage_right = None
+    @multiplot
     def plot_translations(self,
                           tag,
                           epoch,
@@ -77,7 +113,8 @@ class Visualizer():
                           delta_v,
                           mask,
                           store=False,
-                          jupyter=False):
+                          jupyter=False,
+                          method='def'):
         """
         img torch.tensor(h,w,3)
         delta_v torch.tensor(h,w,2)
@@ -126,6 +163,8 @@ Vertical, pos down | neg up:
                                      outline=grey, fill=grey, width=2)
                     except:
                         pass
+        if method != 'def':
+            return np.array(pil_img).astype(np.uint8)
         if jupyter:
             display(pil_img)
         if store:
@@ -135,7 +174,7 @@ Vertical, pos down | neg up:
             img_np = np.array(pil_img).astype(np.uint8)
             self.writer.add_image(
                 tag, img_np, global_step=epoch, dataformats='HWC')
-
+    @multiplot
     def plot_contour(self,
                      tag,
                      epoch,
@@ -150,7 +189,8 @@ Vertical, pos down | neg up:
                      store=False,
                      jupyter=False,
                      thickness=2,
-                     color=(0, 255, 0)):
+                     color=(0, 255, 0),
+                     method='def'):
         """
         tag := tensorboard tag 
         epoch := tensorboard epoche
@@ -199,6 +239,10 @@ Vertical, pos down | neg up:
             for j in range(w):
                 if out[i, j, 1] == 255:
                     img_f[i, j, :] = out[i, j, :]
+
+        if method != 'def':
+            return img_f.astype(np.uint8)
+
         if jupyter:
             display(Image.fromarray(img_f))
 
@@ -208,8 +252,8 @@ Vertical, pos down | neg up:
         if self.writer is not None:
             self.writer.add_image(tag, img_f.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
-
-    def plot_segmentation(self, tag, epoch, label, store):
+    @multiplot
+    def plot_segmentation(self, tag, epoch, label, store,method='def'):
         if label.dtype == np.float32:
             label = label.round()
         image_out = np.zeros(
@@ -217,13 +261,17 @@ Vertical, pos down | neg up:
         for h in range(label.shape[0]):
             for w in range(label.shape[1]):
                 image_out[h, w, :] = SEG_COLORS[int(label[h, w])][:3]
+        
+        if method != 'def':
+            return image_out.astype(np.uint8)
+
         if store:
             save_image(
                 image_out, tag=f"{epoch}_{tag}", p_store=self.p_visu)
         if self.writer is not None:
             self.writer.add_image(
                 tag, image_out, global_step=epoch, dataformats="HWC")
-
+    @multiplot
     def plot_estimated_pose(self,
                             tag,
                             epoch,
@@ -232,7 +280,7 @@ Vertical, pos down | neg up:
                             trans=[[0, 0, 0]],
                             rot_mat=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
                             cam_cx=0, cam_cy=0, cam_fx=0, cam_fy=0,
-                            store=False, jupyter=False, w=2, K = None, H=None):
+                            store=False, jupyter=False, w=2, K = None, H=None, method='def'):
         """
         tag := tensorboard tag 
         epoch := tensorboard epoche
@@ -278,6 +326,8 @@ Vertical, pos down | neg up:
             except:
                 #print("out of bounce")
                 pass
+        if method != 'def':
+            return img_d.astype(np.uint8)
 
         if jupyter:
             display(Image.fromarray(img_d))
@@ -289,8 +339,8 @@ Vertical, pos down | neg up:
         if self.writer is not None:
             self.writer.add_image(tag, img_d.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
-
-    def plot_bounding_box(self, tag, epoch, img, rmin=0, rmax=0, cmin=0, cmax=0, str_width=2, store=False, jupyter=False, b=None):
+    @multiplot
+    def plot_bounding_box(self, tag, epoch, img, rmin=0, rmax=0, cmin=0, cmax=0, str_width=2, store=False, jupyter=False, b=None, method='def'):
         """
         tag := tensorboard tag 
         epoch := tensorboard epoche
@@ -328,6 +378,9 @@ Vertical, pos down | neg up:
         img_d[rmin:rmax, cmax_mi:cmax_ma, :] = c
         print("STORE", store)
         img_d = img_d.astype(np.uint8)
+        if method != 'def':
+            return img_d.astype(np.uint8)
+
         if store:
             #store_ar = (img_d* 255).round().astype(np.uint8)
             save_image(img_d, tag=str(epoch) + tag, p_store=self.p_visu)
@@ -336,10 +389,10 @@ Vertical, pos down | neg up:
         if self.writer is not None:
             self.writer.add_image(tag, img_d.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
-
+    @multiplot
     def plot_batch_projection(self, tag, epoch,
                               images, target, cam,
-                              max_images=10, store=False, jupyter=False):
+                              max_images=10, store=False, jupyter=False, method='def'):
 
         num = min(max_images, target.shape[0])
         fig = plt.figure(figsize=(7, num * 3.5))
@@ -374,6 +427,11 @@ Vertical, pos down | neg up:
             fig.add_subplot(num, 2, i * 2 + 2)
             real = images[i, :, :, :3].cpu().numpy().astype(np.uint8)
             plt.imshow(real)
+        
+        if method != 'def':
+            a = get_img_from_fig(fig).astype(np.uint8)
+            plt.close()
+            return a
 
         if store:
             #store_ar = (img_d* 255).round().astype(np.uint8)
@@ -387,9 +445,9 @@ Vertical, pos down | neg up:
             plot_img_np = get_img_from_fig(fig)
             self.writer.add_image(
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
-        plt.close()
-
-    def visu_network_input(self, tag, epoch, data, max_images=10, store=False, jupyter=False):
+        
+    @multiplot
+    def visu_network_input(self, tag, epoch, data, max_images=10, store=False, jupyter=False, method='def'):
         num = min(max_images, data.shape[0])
         fig = plt.figure(figsize=(7, num * 3.5))
 
@@ -411,6 +469,11 @@ Vertical, pos down | neg up:
             fig.add_subplot(num, 2, i * 2 + 2)
             plt.imshow(render)
             plt.tight_layout()
+        
+        if method != 'def':
+            a = get_img_from_fig(fig).astype(np.uint8)
+            plt.close()
+            return  a  
 
         if store:
             #store_ar = (img_d* 255).round().astype(np.uint8)
@@ -426,8 +489,8 @@ Vertical, pos down | neg up:
             self.writer.add_image(
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
         plt.close()
-    
-    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False):
+    @multiplot
+    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False, method='def'):
         cropped_comp = np.swapaxes( np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=2).astype(np.uint8).T,0,1)
         cropped_comp_img = Image.fromarray(cropped_comp)
         draw = ImageDraw.Draw(cropped_comp_img)
@@ -465,6 +528,8 @@ Flow in Vertical:
                         fill=col, width=2)
                     except:
                         print('failed')
+        if method != 'def':
+            return np.array( cropped_comp_img ).astype(np.uint8)
         if store:
             cropped_comp_img.save(f'{self.p_visu}/{str(epoch)}_{tag}_corrospondence.png')
         if jupyter:
@@ -474,8 +539,8 @@ Flow in Vertical:
             self.writer.add_image(
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
        
-
-    def visu_network_input_pred(self, tag, epoch, data, images, target, cam, max_images=10, store=False, jupyter=False):
+    @multiplot
+    def visu_network_input_pred(self, tag, epoch, data, images, target, cam, max_images=10, store=False, jupyter=False, method='def'):
         num = min(max_images, data.shape[0])
         fig = plt.figure(figsize=(10.5, num * 3.5))
 
@@ -520,6 +585,10 @@ Flow in Vertical:
             # fig.add_subplot(num, 2, i * 2 + 4)
             # real = images[i, :, :, :3].cpu().numpy().astype(np.uint8)
             # plt.imshow(real)
+        if method != 'def':
+            a = get_img_from_fig(fig).astype(np.uint8)
+            plt.close()
+            return a
 
         if store:
             #store_ar = (img_d* 255).round().astype(np.uint8)
