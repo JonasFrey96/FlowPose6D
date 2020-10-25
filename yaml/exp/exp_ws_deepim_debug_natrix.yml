@@ -37,7 +37,7 @@ loss:
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-4
+lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -76,9 +76,9 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 5
-  number_images_log_test: 5
-  number_images_log_val: 5
+  number_images_log_train: 0
+  number_images_log_test: 0
+  number_images_log_val: 0
   network_input_batch: False
   log_to_file: False
   always_calculate: False
@@ -88,7 +88,7 @@ early_stopping_cfg:
 
 loader:
   batch_size: 4
-  num_workers: 8
+  num_workers: 10
   shuffle: True
   pin_memory: True
 
@@ -172,7 +172,7 @@ d_train:
     status: false
     noise_trans: 0
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: 100
     vm_in_dataloader: true
     noise_translation: 0.04
     noise_rotation: 20

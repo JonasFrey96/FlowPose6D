@@ -129,7 +129,7 @@ class YCB(Backend):
         two problems we face. What is if an object is not visible at all -> meta['obj'] = None
         obj_idx is elemnt 1-21 !!!
         """
-        st = time.time()
+        st1 = time.time()
         try:
             img = Image.open(
                 '{0}/{1}-color.png'.format(self._p_ycb, desig))
@@ -363,9 +363,8 @@ class YCB(Backend):
             h_real[:3,:3] = target_r
             h_real[:3,3] = gt_trans
 
-
+            st = time.time()
             new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
-            
             if new_tup is False:
                 return False
             n_tup = (0, 0, 0, 0, tup[4], tup[5] , 0, 0,*tup[8:13])
@@ -514,8 +513,8 @@ class YCB(Backend):
             return tmp[0,0]
 
         #get flow
+        st = time.time()
         flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag, b_real, b_ren )
-
         if type( flow ) is bool: 
             # print('Flow failed')
             return False
@@ -576,7 +575,7 @@ class YCB(Backend):
         
         # b_ren.tl = torch.tensor([0,0])
         # b_ren.br = torch.tensor([480,640])
-        sub = 2
+        sub = 3
         tl, br = b_real.limit_bb()
         h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
         w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
@@ -872,8 +871,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 40000
-        self.max_iterations = 40000
+        self.max_matches = 3000
+        self.max_iterations = 10000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
