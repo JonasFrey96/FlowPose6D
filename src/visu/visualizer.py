@@ -76,8 +76,8 @@ def multiplot(func):
         if args[0].storage_right is not None and args[0].storage_left is not None:
             s = args[0].storage_right.shape
             img_f = np.zeros( (int(s[0]),int(s[1]*2), s[2]), dtype=np.uint8 )
-            img_f[:,:s[1]] = args[0].storage_right
-            img_f[:,s[1]:] = args[0].storage_left
+            img_f[:,:s[1]] = args[0].storage_left
+            img_f[:,s[1]:] = args[0].storage_right
             args[0].storage_left = None
             args[0].storage_right = None
             if kwargs.get('store', True):
@@ -110,48 +110,48 @@ class Visualizer():
                           tag,
                           epoch,
                           img,
-                          delta_v,
+                          flow,
                           mask,
                           store=False,
                           jupyter=False,
                           method='def'):
         """
         img torch.tensor(h,w,3)
-        delta_v torch.tensor(h,w,2)
+        flow torch.tensor(h,w,2)
         mask torch.tensor(h,w) BOOL
         """
-        delta_v = delta_v * \
+        flow = flow * \
             mask.type(torch.float32)[:, :, None].repeat(1, 1, 2)
-        # delta_v '[+down/up-], [+right/left-]'
+        # flow '[+down/up-], [+right/left-]'
 
-        def bin_dir_amplitude(delta_v):
-            amp = torch.norm(delta_v, p=2, dim=2)
+        def bin_dir_amplitude(flow):
+            amp = torch.norm(flow, p=2, dim=2)
             amp = amp / (torch.max(amp)+1.0e-6)  # normalize the amplitude
-            dir_bin = torch.atan2(delta_v[:, :, 0], delta_v[:, :, 1])
+            dir_bin = torch.atan2(flow[:, :, 0], flow[:, :, 1])
             nr_bins = 8
             bin_rad = 2 * pi / nr_bins
             dir_bin = torch.round(dir_bin / bin_rad) * bin_rad
             return dir_bin, amp
 
-        rot_bin, amp = bin_dir_amplitude(delta_v)
+        rot_bin, amp = bin_dir_amplitude(flow)
         s = 20
         a = 2 if s > 15 else 1
         pil_img = Image.fromarray(img.numpy().astype(np.uint8), 'RGB')
         draw = ImageDraw.Draw(pil_img)
         txt = f"""Horizontal, pos right | neg left:
-  max = {torch.max(delta_v[mask][:,0])}
-  min = {torch.min(delta_v[mask][:,0])}
-  mean = {torch.mean(delta_v[mask][:,0])}
+  max = {torch.max(flow[mask][:,0])}
+  min = {torch.min(flow[mask][:,0])}
+  mean = {torch.mean(flow[mask][:,0])}
 Vertical, pos down | neg up:
-  max = {torch.max(delta_v[mask][:,1])}
-  min = {torch.min(delta_v[mask][:,1])}
-  mean = {torch.mean(delta_v[mask][:,1])}"""
+  max = {torch.max(flow[mask][:,1])}
+  min = {torch.min(flow[mask][:,1])}
+  mean = {torch.mean(flow[mask][:,1])}"""
         draw.text((10, 60), txt, fill=(201, 45, 136, 255))
         col = (0, 255, 0)
         grey = (207, 207, 207)
-        for u in range(int(delta_v.shape[0] / s) - 2):
+        for u in range(int(flow.shape[0] / s) - 2):
             u = int(u * s)
-            for v in range(int(delta_v.shape[1] / s) - 2):
+            for v in range(int(flow.shape[1] / s) - 2):
                 v = int(v * s)
                 if mask[u, v] == True:
                     du = round(math.cos(rot_bin[u, v])) * s / 2 * amp[u, v]

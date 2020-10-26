@@ -129,7 +129,7 @@ class YCB(Backend):
         two problems we face. What is if an object is not visible at all -> meta['obj'] = None
         obj_idx is elemnt 1-21 !!!
         """
-        st = time.time()
+        st1 = time.time()
         try:
             img = Image.open(
                 '{0}/{1}-color.png'.format(self._p_ycb, desig))
@@ -363,9 +363,8 @@ class YCB(Backend):
             h_real[:3,:3] = target_r
             h_real[:3,3] = gt_trans
 
-
+            st = time.time()
             new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
-            
             if new_tup is False:
                 return False
             n_tup = (0, 0, 0, 0, tup[4], tup[5] , 0, 0,*tup[8:13])
@@ -514,14 +513,18 @@ class YCB(Backend):
             return tmp[0,0]
 
         #get flow
+        st = time.time()
         flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag, b_real, b_ren )
-
         if type( flow ) is bool: 
             # print('Flow failed')
             return False
         u_cropped = l_to_cropped(  flow[0] )
         v_cropped = l_to_cropped(  flow[1] )
         valid_flow_mask_cropped =  l_to_cropped( np.float32(flow[2]) )
+        valid_flow_mask_cropped = valid_flow_mask_cropped > 0.5
+        if torch.sum(valid_flow_mask_cropped,(0,1)) < 50: 
+            print('Failed to crop flow mask to less valid flow visible')
+            return False
 
         # scale the u and v so this is not in the uncropped space !
         v_cropped_scaled = np.zeros( v_cropped.shape )
@@ -557,7 +560,6 @@ class YCB(Backend):
         if np.sum(f_1) < 200:
             # to little of the object is visible 
             return False
-
         st = time.time()
         m_real = copy.deepcopy(self.mesh[idx])
         m_render = copy.deepcopy(self.mesh[idx])
@@ -576,7 +578,7 @@ class YCB(Backend):
         
         # b_ren.tl = torch.tensor([0,0])
         # b_ren.br = torch.tensor([480,640])
-        sub = 2
+        sub = 3
         tl, br = b_real.limit_bb()
         h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
         w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
@@ -654,7 +656,7 @@ class YCB(Backend):
         f_3 = f_2  # *f_1
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
-        if matches < 50 or np.sum(f_3) < 10: 
+        if matches < 50 or np.sum(f_3) < 50: 
             # print(f'not enough matches{matches}, F3 {np.sum(f_3)}, REAL {h_idx_real.shape}')
             # print(render_res, rays_dir_render2.shape, rays_origin_render2.shape )
             return False
@@ -680,7 +682,6 @@ class YCB(Backend):
         ren_br[0] = int( b_ren.br[0] )
         ren_br[1] = int( b_ren.br[1] )
         
-
         return u_map, v_map, valid_flow_mask, torch.tensor( real_tl, dtype=torch.int32) , torch.tensor( real_br, dtype=torch.int32) , torch.tensor( ren_tl, dtype=torch.int32) , torch.tensor( ren_br, dtype=torch.int32 ) 
 
     def get_desig(self, path):
@@ -872,8 +873,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 40000
-        self.max_iterations = 40000
+        self.max_matches = 3000
+        self.max_iterations = 10000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
