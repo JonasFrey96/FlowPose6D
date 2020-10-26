@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/debug/_" #overfit_1_batch_bs_1
+model_path: "/media/scratch1/jonfrey/models/runs/efficient_disparity/debug/_" #overfit_1_batch_bs_1
 estimator_restore: false
 estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
 refiner_restore: false
@@ -59,8 +59,8 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 20
-  limit_val_batches: 20
+  limit_train_batches: 50
+  limit_val_batches: 50
   limit_test_batches: 5
   progress_bar_refresh_rate: 1
   max_epochs: 100
@@ -76,9 +76,9 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 0
+  number_images_log_train: 50
   number_images_log_test: 0
-  number_images_log_val: 0
+  number_images_log_val: 50
   network_input_batch: False
   log_to_file: False
   always_calculate: False

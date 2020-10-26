@@ -808,51 +808,32 @@ if __name__ == "__main__":
         checkpoint = torch.load(
             exp['checkpoint_load'], map_location=lambda storage, loc: storage)
         model.load_state_dict(checkpoint['state_dict'])
-    with torch.autograd.set_detect_anomaly(True):
-        # early_stop_callback=early_stop_callback,
-        trainer = Trainer(**exp['trainer'],
-            checkpoint_callback=checkpoint_callback,
-            default_root_dir=exp['model_path'])
+    # with torch.autograd.set_detect_anomaly(True):
+    # early_stop_callback=early_stop_callback,
+    trainer = Trainer(**exp['trainer'],
+        checkpoint_callback=checkpoint_callback,
+        default_root_dir=exp['model_path'])
 
-        if exp.get('model_mode', 'fit') == 'fit':
-            # lr_finder = trainer.lr_find(
-            #     model, min_lr=0.0000001, max_lr=0.001, num_training=50, early_stop_threshold=100)
-            # lr_finder.results
-            # lr_finder.suggestion()
-            # print('LR FInder suggestion', lr_finder.suggestion())
-            # print(lr_finder.results)
-            trainer.fit(model)
-        elif exp.get('model_mode', 'fit') == 'test':
-            trainer.test(model)
-            if exp.get('conv_test2df', False):
-                command = 'python scripts/evaluation/experiment2df.py %s --write-csv --write-pkl' % (
-                    model_path + '/lightning_logs/version_0')
-                os.system(command)
-        elif exp.get('model_mode', 'fit') == 'profile':
+    if exp.get('model_mode', 'fit') == 'fit':
+        # lr_finder = trainer.lr_find(
+        #     model, min_lr=0.0000001, max_lr=0.001, num_training=50, early_stop_threshold=100)
+        # lr_finder.results
+        # lr_finder.suggestion()
+        # print('LR FInder suggestion', lr_finder.suggestion())
+        # print(lr_finder.results)
+        trainer.fit(model)
+    elif exp.get('model_mode', 'fit') == 'test':
+        trainer.test(model)
+        if exp.get('conv_test2df', False):
+            command = 'python scripts/evaluation/experiment2df.py %s --write-csv --write-pkl' % (
+                model_path + '/lightning_logs/version_0')
+            os.system(command)
+    elif exp.get('model_mode', 'fit') == 'profile':
 
-            trainer.test(model)
-            with profiler.profile(record_shapes=True) as prof:
-                with profiler.record_function("model_inference"):
-                    subset_indices = [0]  # select your indices here as a list
-                    subset = torch.utils.data.Subset(
-                        model.train_dataloader().dataset, subset_indices)
-                    testloader_subset = torch.utils.data.DataLoader(
-                        subset, batch_size=1, num_workers=0, shuffle=False)
-                    for inputs in testloader_subset:
-                        for j, t in enumerate(inputs[0]):
-                            try:
-                                inputs[0][j] = inputs[0][j].cuda()
-                            except:
-                                pass
-                        model(inputs[0])
-
-            print(prof.key_averages().table(
-                sort_by="cpu_time_total", row_limit=10))
-            print(prof.key_averages(group_by_input_shape=True).table(
-                sort_by="cpu_time_total", row_limit=10))
-            with profiler.profile(profile_memory=True, record_shapes=True) as prof:
-                # select your indices here as a list
-                subset_indices = [0]
+        trainer.test(model)
+        with profiler.profile(record_shapes=True) as prof:
+            with profiler.record_function("model_inference"):
+                subset_indices = [0]  # select your indices here as a list
                 subset = torch.utils.data.Subset(
                     model.train_dataloader().dataset, subset_indices)
                 testloader_subset = torch.utils.data.DataLoader(
@@ -864,10 +845,29 @@ if __name__ == "__main__":
                         except:
                             pass
                     model(inputs[0])
-                    print('START')
-            print(prof.key_averages().table(
-                sort_by="self_cpu_memory_usage", row_limit=10))
 
-        else:
-            print("Wrong model_mode defined in exp config")
-            raise Exception
+        print(prof.key_averages().table(
+            sort_by="cpu_time_total", row_limit=10))
+        print(prof.key_averages(group_by_input_shape=True).table(
+            sort_by="cpu_time_total", row_limit=10))
+        with profiler.profile(profile_memory=True, record_shapes=True) as prof:
+            # select your indices here as a list
+            subset_indices = [0]
+            subset = torch.utils.data.Subset(
+                model.train_dataloader().dataset, subset_indices)
+            testloader_subset = torch.utils.data.DataLoader(
+                subset, batch_size=1, num_workers=0, shuffle=False)
+            for inputs in testloader_subset:
+                for j, t in enumerate(inputs[0]):
+                    try:
+                        inputs[0][j] = inputs[0][j].cuda()
+                    except:
+                        pass
+                model(inputs[0])
+                print('START')
+        print(prof.key_averages().table(
+            sort_by="self_cpu_memory_usage", row_limit=10))
+
+    else:
+        print("Wrong model_mode defined in exp config")
+        raise Exception

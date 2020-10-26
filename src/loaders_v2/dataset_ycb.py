@@ -91,6 +91,7 @@ class YCB(Backend):
                 device='cpu',
                 load_images=False)
             self.up = torch.nn.UpsamplingBilinear2d(size=(self.h, self.w))
+            self.up_nearest = torch.nn.UpsamplingNearest2d(size=(self.h, self.w))
         
 
         if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
@@ -463,7 +464,7 @@ class YCB(Backend):
 
         crop_d = torch.transpose(crop_d, 0, 2)
         crop_d = torch.transpose(crop_d, 1, 2)
-        render_d = self.up(crop_d[None])[0, :, :]
+        render_d = self.up_nearest(crop_d[None])[0, :, :]
 
         # real data
         u_cropped = torch.zeros((h, w), dtype=torch.long)
@@ -499,17 +500,17 @@ class YCB(Backend):
             torch.float32))[None]
         crop_d = torch.transpose(crop_d, 1, 3)
         crop_d = torch.transpose(crop_d, 2, 3)
-        real_d = self.up(crop_d)[0]
+        real_d = self.up_nearest(crop_d)[0]
 
         
         tmp = torch.transpose(torch.transpose(
             b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
-        gt_label_cropped = torch.round(self.up(tmp.type(
+        gt_label_cropped = torch.round(self.up_nearest(tmp.type(
             torch.float32).unsqueeze(0))).clamp(0, 21)[0][0]
         
         def l_to_cropped(l):
             tmp = b.crop(torch.from_numpy(  l[:,:,None] ))
-            tmp = self.up(tmp[:,:,0] [None,None,:,:] )
+            tmp = self.up_nearest(tmp[:,:,0] [None,None,:,:] )
             return tmp[0,0]
 
         #get flow
@@ -578,7 +579,7 @@ class YCB(Backend):
         
         # b_ren.tl = torch.tensor([0,0])
         # b_ren.br = torch.tensor([480,640])
-        sub = 3
+        sub = 1
         tl, br = b_real.limit_bb()
         h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
         w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
@@ -653,7 +654,7 @@ class YCB(Backend):
         # except:
             # pass
         f_2 = disparity_pixels[:,:,0] != -999
-        f_3 = f_2  # *f_1
+        f_3 = f_2  * f_1
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
         if matches < 50 or np.sum(f_3) < 50: 
@@ -665,7 +666,7 @@ class YCB(Backend):
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
 
         inp = np.uint8( f_3*255 ) 
-        kernel = np.ones((2,2),np.uint8)
+        kernel = np.ones((1,1),np.uint8)
         valid_flow_mask = ( cv2.dilate(inp, kernel, iterations = 1) != 0 )
         valid_flow_mask = valid_flow_mask * f_1
 
@@ -873,8 +874,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 3000
-        self.max_iterations = 10000
+        self.max_matches = 5000
+        self.max_iterations = 20000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
