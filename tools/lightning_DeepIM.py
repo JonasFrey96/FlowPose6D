@@ -180,10 +180,10 @@ class TrackNet6D(LightningModule):
         #points, choose, img, target, model_points, idx = batch[0:6]
         #depth_img, label, real_img_original, cam = batch[6:10]
         model_points = batch[4]
-        idx = batch[5]
+        idx = batch[5]  # Be carefull here the first objects starts with 0. Normally 0 is the NO object class in all other datastructures
         real_img_original = batch[8]
         cam = batch[9]
-        gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
+        gt_rot_wxyz, gt_trans, unique_desig = batch[10:13] # unique_desig[1] contains the idx starting at 1 for the first object 
         
         log_scalars = {}
         bs = model_points.shape[0]
@@ -206,10 +206,12 @@ class TrackNet6D(LightningModule):
 
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
+
         ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
         uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
         flow_loss = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
-        
+        if torch.any( torch.sum( ind[:,0,:,:], (1,2)) < 30 ): 
+            print( 'Invalid Flow Mask' )
         if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False): 
             real_tl, real_br, ren_tl, ren_br = bb 
             K_ren = torch.tensor( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
@@ -462,23 +464,23 @@ class TrackNet6D(LightningModule):
         loss = torch.mean(dis)
         
         try:
-            self._dict_track['val_loss  [+inf - 0]'].append(float(loss))
+            self._dict_track['val_disparity  [+inf - 0]'].append(float(loss))
         except:
-            self._dict_track['val_loss  [+inf - 0]'] = [float(loss)]
+            self._dict_track['val_disparity  [+inf - 0]'] = [float(loss)]
         
         for i in range(0, bs):
             # object loss for each object
             obj = int(unique_desig[1][i])
             obj = list(
                 self.trainer.val_dataloaders[0].dataset._backend._name_to_idx_full.keys())[obj - 1]
-            if f'val_{obj}_adds_dis  [+inf - 0]' in self._dict_track.keys():
-                self._dict_track[f'val_{obj}_adds_dis  [+inf - 0]'].append(
+            if f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]' in self._dict_track.keys():
+                self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'].append(
                     float(dis[i]))
             else:
-                self._dict_track[f'val_{obj}_adds_dis  [+inf - 0]'] = [
+                self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'] = [
                     float(dis[i])]
         
-        tensorboard_logs = {'val_loss': float(loss)}
+        tensorboard_logs = {'val_disparity': float(loss)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
 
         val_loss = loss
@@ -509,18 +511,20 @@ class TrackNet6D(LightningModule):
 
             self._dict_track.pop(old_key, None)
 
-        df1 = dict_to_df(avg_dict)
-        df2 = dict_to_df(get_df_dict(pre='val'))
-        img = compare_df(df1, df2, key='auc [0 - 100]')
-        tag = 'val_table_res_vs_df'
-        img.save(self.exp['model_path'] +
-                 f'/visu/{self.current_epoch}_{tag}.png')
-        self.logger.experiment.add_image(tag, np.array(img).astype(
-            np.uint8), global_step=self.current_epoch, dataformats='HWC')
-
-        avg_val_dis_float = float(avg_dict['avg_val_loss  [+inf - 0]'])
+        try:
+            df1 = dict_to_df(avg_dict)
+            df2 = dict_to_df(get_df_dict(pre='val'))
+            img = compare_df(df1, df2, key='auc [0 - 100]')
+            tag = 'val_table_res_vs_df'
+            img.save(self.exp['model_path'] +
+                    f'/visu/{self.current_epoch}_{tag}.png')
+            self.logger.experiment.add_image(tag, np.array(img).astype(
+                np.uint8), global_step=self.current_epoch, dataformats='HWC')
+        except:
+            pass
+        avg_val_dis_float = float(avg_dict['avg_val_disparity  [+inf - 0]'])
         return {'avg_val_dis_float': avg_val_dis_float,
-                'avg_val_dis': avg_dict['avg_val_loss  [+inf - 0]'],
+                'avg_val_dis': avg_dict['avg_val_disparity  [+inf - 0]'],
                 'log': avg_dict}
 
     def train_epoch_end(self, outputs):
@@ -804,14 +808,12 @@ if __name__ == "__main__":
         checkpoint = torch.load(
             exp['checkpoint_load'], map_location=lambda storage, loc: storage)
         model.load_state_dict(checkpoint['state_dict'])
-    print("START START")
     with torch.autograd.set_detect_anomaly(True):
         # early_stop_callback=early_stop_callback,
         trainer = Trainer(**exp['trainer'],
             checkpoint_callback=checkpoint_callback,
             default_root_dir=exp['model_path'])
 
-        print( 'try', exp.get('model_mode', 'fit') )
         if exp.get('model_mode', 'fit') == 'fit':
             # lr_finder = trainer.lr_find(
             #     model, min_lr=0.0000001, max_lr=0.001, num_training=50, early_stop_threshold=100)
@@ -819,9 +821,7 @@ if __name__ == "__main__":
             # lr_finder.suggestion()
             # print('LR FInder suggestion', lr_finder.suggestion())
             # print(lr_finder.results)
-            print('Fit Start')
             trainer.fit(model)
-            print('FIT Done Completly')
         elif exp.get('model_mode', 'fit') == 'test':
             trainer.test(model)
             if exp.get('conv_test2df', False):

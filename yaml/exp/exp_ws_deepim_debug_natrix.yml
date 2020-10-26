@@ -59,8 +59,8 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 500
-  limit_val_batches: 5
+  limit_train_batches: 20
+  limit_val_batches: 20
   limit_test_batches: 5
   progress_bar_refresh_rate: 1
   max_epochs: 100
@@ -88,7 +88,7 @@ early_stopping_cfg:
 
 loader:
   batch_size: 4
-  num_workers: 10
+  num_workers: 2
   shuffle: True
   pin_memory: True
 
@@ -174,7 +174,7 @@ d_train:
   output_cfg:
     overfitting_nr_idx: 100
     vm_in_dataloader: true
-    noise_translation: 0.04
+    noise_translation: 0.02
     noise_rotation: 20
     return_same_size_tensors: true
     force_one_object_visible: true

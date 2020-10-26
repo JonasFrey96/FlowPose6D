@@ -521,6 +521,10 @@ class YCB(Backend):
         u_cropped = l_to_cropped(  flow[0] )
         v_cropped = l_to_cropped(  flow[1] )
         valid_flow_mask_cropped =  l_to_cropped( np.float32(flow[2]) )
+        valid_flow_mask_cropped = valid_flow_mask_cropped > 0.5
+        if torch.sum(valid_flow_mask_cropped,(0,1)) < 50: 
+            print('Failed to crop flow mask to less valid flow visible')
+            return False
 
         # scale the u and v so this is not in the uncropped space !
         v_cropped_scaled = np.zeros( v_cropped.shape )
@@ -556,7 +560,6 @@ class YCB(Backend):
         if np.sum(f_1) < 200:
             # to little of the object is visible 
             return False
-
         st = time.time()
         m_real = copy.deepcopy(self.mesh[idx])
         m_render = copy.deepcopy(self.mesh[idx])
@@ -653,7 +656,7 @@ class YCB(Backend):
         f_3 = f_2  # *f_1
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
-        if matches < 50 or np.sum(f_3) < 10: 
+        if matches < 50 or np.sum(f_3) < 50: 
             # print(f'not enough matches{matches}, F3 {np.sum(f_3)}, REAL {h_idx_real.shape}')
             # print(render_res, rays_dir_render2.shape, rays_origin_render2.shape )
             return False
@@ -679,7 +682,6 @@ class YCB(Backend):
         ren_br[0] = int( b_ren.br[0] )
         ren_br[1] = int( b_ren.br[1] )
         
-
         return u_map, v_map, valid_flow_mask, torch.tensor( real_tl, dtype=torch.int32) , torch.tensor( real_br, dtype=torch.int32) , torch.tensor( ren_tl, dtype=torch.int32) , torch.tensor( ren_br, dtype=torch.int32 ) 
 
     def get_desig(self, path):
