@@ -60,13 +60,6 @@ conda env export --name machine_perception > machine_perception.yml
 tar -cvf data_syn.tar ./data_syn
 
 
-bsub -Is -n 20 -W 3:59 -R "rusage[mem=4500,ngpus_excl_p=8]" -R "rusage[scratch=20000]" bash
-
-# 400 gb scratch
-bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=4]" -R "rusage[scratch=25000]" bash
-
-bsub -Is -n 20 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "rusage[scratch=20000]" bash
-
 module load eth_proxy python_gpu/3.7.7 gcc/6.3.0
 python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_yash.yml
 /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python --env=yaml/env/env_leonhard_yash.yml
@@ -77,26 +70,23 @@ cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/py
 #debug
 cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml
 
-bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=25000]" ~/PLR2/scripts/lightning.sh
-
-bsub -s -n 4 -W 0:29 -R "rusage[mem=3000,ngpus_excl_p=8]" -R "rusage[scratch=25000]" ~/PLR2/scripts/lightning.sh
-
 
 
 # Interactive with good GPU:
-bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=25000]" bash
+bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=20000]" bash
 # Interactive with 4-GPU:
-bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=4]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=12500]" bash
+bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=4]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=20000]" bash
 
+bsub -Is -n 20 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=16000]" bash
 
-cd ~/PLR3 && /cluster/home/jonfrey/miniconda3/envs/track3/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/t/exp1.yml
+cd ~/PLR3 && /cluster/home/jonfrey/miniconda3/envs/track3/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/t4h/exp1.yml
 
 cd ~/PLR3 && CUDA_LAUNCH_BLOCKING=1 /cluster/home/jonfrey/miniconda3/envs/track3/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml
 CUDA_LAUNCH_BLOCKING=1 python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml
 
 
 # Final sub:
-bsub -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=25000]" ./scripts/leonhard/submit.sh --exp=yaml/exp/exp/exp1.yml --env=yaml/env/env_leonhard_jonas.yml 
+bsub -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=20000]" ./scripts/leonhard/submit.sh --exp=yaml/exp/exp/exp1.yml --env=yaml/env/env_leonhard_jonas.yml 
 
 ```
 
