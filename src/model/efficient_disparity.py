@@ -12,7 +12,7 @@ def deconv(in_planes, out_planes):
     )
 
 class EfficientDisparity(nn.Module):
-  def __init__(self, num_classes = 22, backbone= 'efficientnet-b6'):
+  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1'):
     # tested with b6
     super().__init__()
     self.feature_extractor = EfficientNet.from_pretrained(backbone)

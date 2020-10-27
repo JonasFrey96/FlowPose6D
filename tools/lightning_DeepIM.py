@@ -264,19 +264,7 @@ class TrackNet6D(LightningModule):
                 render_d[b][0].type( typ ), 
                 h_real_est.type( typ ), 
                 h_render[b].type( typ ))
-            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
-                copy.deepcopy(real_tl[b]), 
-                copy.deepcopy(ren_br[b]), 
-                copy.deepcopy(ren_tl[b]), 
-                copy.deepcopy(flow_mask[b]), 
-                torch.zeros( flow[b, 0, :, :].shape, device= self.device), 
-                torch.zeros( flow[b, 1, :, :].shape, device= self.device), 
-                copy.deepcopy(K_real.type( typ )), 
-                copy.deepcopy(K_ren.type( typ )), 
-                copy.deepcopy(real_d[b][0].type( typ )), 
-                copy.deepcopy(render_d[b][0].type( typ )), 
-                copy.deepcopy(h_real_est.type( typ )), 
-                copy.deepcopy(h_render[b].type( typ )))
+
 
             h_real_new_est_pred_flow =  T_res @ h_render[0] # set rotation
         
@@ -414,9 +402,11 @@ class TrackNet6D(LightningModule):
             torch.mean(focal_loss, dim=0).detach())
         log_scalars[f'loss_flow'] = float(torch.mean(flow_loss, dim=0).detach())
         return loss, log_scalars
+    def on_epoch_start(self):
+        self.counter_images_logged = 0
+        self._mode = 'train'
 
     def training_step(self, batch, batch_idx):
-        self._mode = 'train'
         st = time.time()
         unique_desig = batch[0][12]
         total_loss = 0
@@ -443,8 +433,11 @@ class TrackNet6D(LightningModule):
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
         return {'loss': loss, 'log': tensorboard_logs, 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Flow': log_scalars['loss_flow']}}
 
-    def validation_step(self, batch, batch_idx):
+    def on_pre_performance_check(self):
+        self.counter_images_logged = 0
         self._mode = 'val'
+        
+    def validation_step(self, batch, batch_idx):
         st = time.time()
         unique_desig = batch[0][12]
         total_loss = 0
