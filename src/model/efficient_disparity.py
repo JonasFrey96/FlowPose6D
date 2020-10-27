@@ -87,8 +87,8 @@ class EfficientDisparity(nn.Module):
 
     return flow, segmentation
 
-from torchsummary import summary
 if  __name__ == "__main__":
+  from torchsummary import summary
   model = EfficientDisparity()
   BS = 2
   H = 480
