@@ -212,7 +212,7 @@ class TrackNet6D(LightningModule):
         flow_loss = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
         if torch.any( torch.sum( ind[:,0,:,:], (1,2)) < 30 ): 
             print( 'Invalid Flow Mask' )
-        if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False): 
+        if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ): 
             real_tl, real_br, ren_tl, ren_br = bb 
             K_ren = torch.tensor( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
 
@@ -272,7 +272,6 @@ class TrackNet6D(LightningModule):
             self._k += 1
             self.counter_images_logged += 1
             mask = (flow_mask == True)
-
             
             self.visualizer.plot_translations(
                 tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
@@ -379,10 +378,8 @@ class TrackNet6D(LightningModule):
                                         K = K_real.cpu().numpy(),
                                         H = h_real_new_est_pred_flow.detach().cpu().numpy(),
                                         method='right')
-
-            p = model_points.shape[1]
-
-            target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,p,1)
+        if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ): 
+            target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,model_points.shape[1],1)
             # Compute ADD-S
             adds_res_gt_flow = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_new_est[None].type( target.dtype) )
             adds_res_pred_flow = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_new_est_pred_flow[None].type( target.dtype))
@@ -436,9 +433,16 @@ class TrackNet6D(LightningModule):
     def on_pre_performance_check(self):
         self.counter_images_logged = 0
         self._mode = 'val'
-        
+        print('ONE PERFORMANCE CHECK')
+        print('ONE PERFORMANCE CHECK', self.counter_images_logged, self._mode)
+    def on_validation_epoch_start(self):
+        self.counter_images_logged = 0
+        self._mode = 'val'
+        print('ONE PERFORMANCE CHECK')
+        print('ONE PERFORMANCE CHECK', self.counter_images_logged, self._mode)
     def validation_step(self, batch, batch_idx):
         st = time.time()
+        self._mode = 'val'
         unique_desig = batch[0][12]
         total_loss = 0
         total_dis = 0
@@ -473,6 +477,18 @@ class TrackNet6D(LightningModule):
                 self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'] = [
                     float(dis[i])]
         
+        adds_mets = ['init','res_gt_flow','res_pred_flow']
+        for n in adds_mets:
+            try:
+                na = f'val_avg_ADDS_{n} (only for first obj in batch) [+inf - 0]' 
+                value = log_scalars[f'adds_{n}'] 
+                if na in self._dict_track.keys():
+                    self._dict_track[na].append( float(dis[i]) )
+                else:
+                    self._dict_track[na] = [ float(dis[i]) ]
+            except:
+                pass            
+
         tensorboard_logs = {'val_disparity': float(loss)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
 
