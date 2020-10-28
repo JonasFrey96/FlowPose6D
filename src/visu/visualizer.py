@@ -330,7 +330,7 @@ Vertical, pos down | neg up:
             return img_d.astype(np.uint8)
 
         if jupyter:
-            display(Image.fromarray(img_d))
+            display(Image.fromarray(img_d.astype(np.uint8)))
 
         if store:
             #store_ar = (img_d* 255).round().astype(np.uint8)
@@ -385,7 +385,7 @@ Vertical, pos down | neg up:
             #store_ar = (img_d* 255).round().astype(np.uint8)
             save_image(img_d, tag=str(epoch) + tag, p_store=self.p_visu)
         if jupyter:
-            display(Image.fromarray(img_d))
+            display(Image.fromarray(np.uint8(img_d) ))
         if self.writer is not None:
             self.writer.add_image(tag, img_d.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
@@ -490,7 +490,7 @@ Vertical, pos down | neg up:
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
         plt.close()
     @multiplot
-    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False, method='def'):
+    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False, method='def', res_h =30, res_w=30):
         cropped_comp = np.swapaxes( np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=2).astype(np.uint8).T,0,1)
         cropped_comp_img = Image.fromarray(cropped_comp)
         draw = ImageDraw.Draw(cropped_comp_img)
@@ -514,8 +514,8 @@ Flow in Vertical:
         w = 640
         h = 480
         col = (0,255,0)
-        for _w in range(0,w,30):
-            for _h in range(0,h,30): 
+        for _w in range(0,w,res_w):
+            for _h in range(0,h,res_h): 
 
                 if flow_mask[_h,_w] != 0:
                     try:
