@@ -430,16 +430,9 @@ class TrackNet6D(LightningModule):
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
         return {'loss': loss, 'log': tensorboard_logs, 'progress_bar': {'L_Seg': log_scalars['loss_segmentation'], 'L_Flow': log_scalars['loss_flow']}}
 
-    def on_pre_performance_check(self):
-        self.counter_images_logged = 0
-        self._mode = 'val'
-        print('ONE PERFORMANCE CHECK')
-        print('ONE PERFORMANCE CHECK', self.counter_images_logged, self._mode)
     def on_validation_epoch_start(self):
         self.counter_images_logged = 0
         self._mode = 'val'
-        print('ONE PERFORMANCE CHECK')
-        print('ONE PERFORMANCE CHECK', self.counter_images_logged, self._mode)
     def validation_step(self, batch, batch_idx):
         st = time.time()
         self._mode = 'val'
@@ -483,9 +476,9 @@ class TrackNet6D(LightningModule):
                 na = f'val_avg_ADDS_{n} (only for first obj in batch) [+inf - 0]' 
                 value = log_scalars[f'adds_{n}'] 
                 if na in self._dict_track.keys():
-                    self._dict_track[na].append( float(dis[i]) )
+                    self._dict_track[na].append( value )
                 else:
-                    self._dict_track[na] = [ float(dis[i]) ]
+                    self._dict_track[na] = [value]
             except:
                 pass            
 
