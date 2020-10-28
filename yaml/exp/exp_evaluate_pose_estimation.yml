@@ -59,8 +59,8 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 5
-  limit_val_batches: 5
+  limit_train_batches: 50
+  limit_val_batches: 50
   limit_test_batches: 5
   progress_bar_refresh_rate: 1
   max_epochs: 100
@@ -76,9 +76,9 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 5
-  number_images_log_test: 5
-  number_images_log_val: 5
+  number_images_log_train: 50
+  number_images_log_test: 0
+  number_images_log_val: 50
   network_input_batch: False
   log_to_file: False
   always_calculate: False
@@ -152,8 +152,7 @@ d_train:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: #null # if not null add list with specific elements
-    - 2
+  obj_list_fil: null # if not null add list with specific elements
   obj_list_sym:
     - 12
     - 15
