@@ -577,7 +577,7 @@ class YCB(Backend):
         
         # b_ren.tl = torch.tensor([0,0])
         # b_ren.br = torch.tensor([480,640])
-        sub = 1
+        sub = 2
         tl, br = b_real.limit_bb()
         h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
         w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
@@ -872,8 +872,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 5000
-        self.max_iterations = 20000
+        self.max_matches = 1500
+        self.max_iterations = 10000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):

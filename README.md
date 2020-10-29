@@ -70,7 +70,8 @@ cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/py
 #debug
 cd ~/PLR3 && /cluster/work/riner/users/PLR-2020/jonfrey/conda/envs/track2/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml
 
-
+# Copying model to Natrix from Leonhard:
+scp jonfrey@login.leonhard.ethz.ch:/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_b1/2020-10-28T00:29:24_non_overfit_24h_lr-4_obj2_loaded24h/* /media/scratch1/jonfrey/models/runs/cluster/
 
 # Interactive with good GPU:
 bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=20000]" bash

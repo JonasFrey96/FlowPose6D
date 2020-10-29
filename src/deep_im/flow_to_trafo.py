@@ -44,6 +44,9 @@ def filter_pcd_given_depthmap(pcd, depth, scal= 10000):
 
     return N torch.bool
     """
+    m1 = (depth/scal) > 0.2
+    return m1
+
     m1 = depth != 0
     val_d = depth[ m1 ]
     mean = torch.mean(val_d)
