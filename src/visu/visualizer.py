@@ -339,6 +339,85 @@ Vertical, pos down | neg up:
         if self.writer is not None:
             self.writer.add_image(tag, img_d.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
+    
+    @multiplot
+    def plot_estimated_pose_on_bb(  self,
+                                    tag,
+                                    epoch,
+                                    img,
+                                    points,
+                                    tl,
+                                    br,
+                                    trans=[[0, 0, 0]],
+                                    rot_mat=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                                    cam_cx=0, cam_cy=0, cam_fx=0, cam_fy=0,
+                                    store=False, jupyter=False, w=2, K = None, H=None, method='def'):
+        """
+        tag := tensorboard tag 
+        epoch := tensorboard epoche
+        store := ture -> stores the image to standard path
+        path := != None creats the path and store to it path/tag.png
+        img:= original_image, [widht,height,RGB]
+        points:= points of the object model [length,x,y,z]
+        trans: [1,3]
+        rot: [3,3]
+        """
+        if K is not None: 
+            cam_cx = K [0,2]
+            cam_cy = K [1,2] 
+            cam_fx = K [0,0]
+            cam_fy = K [1,1]
+        if H is not None:
+            rot_mat = H[:3,:3]
+            trans = H[:3,3][None,:]
+            if H[3,3] != 1:
+                raise Exception
+            if H[3,0] != 0 or H[3,1] != 0 or H[3,2] != 0:
+                raise Exception
+
+            
+        if type(rot_mat) == list:
+            rot_mat = np.array(rot_mat)
+        if type(trans) == list:
+            trans = np.array(trans)
+
+        img_d = copy.deepcopy(img)
+        points = np.dot(points, rot_mat.T)
+        points = np.add(points, trans[0, :])
+        width = int( br[1] - tl[1] )
+        height = int( br[0] - tl[0] )
+        off_h = int( tl[0] ) 
+        off_w = int( tl[1] )
+        
+        for i in range(0, points.shape[0]):
+            p_x = points[i, 0]
+            p_y = points[i, 1]
+            p_z = points[i, 2]
+
+            u = int( (int(((p_x / p_z) * cam_fx) + cam_cx) - off_w) / width * 640 )
+            v = int( (int(((p_y / p_z) * cam_fy) + cam_cy) - off_h) / height * 480 )
+
+            try:
+                img_d[v - w:v + w + 1, u - w:u + w + 1, 0] = 0
+                img_d[v - w:v + w + 1, u - w:u + w + 1, 1] = 255
+                img_d[v - w:v + w + 1, u - w:u + w + 1, 0] = 0
+            except:
+                #print("out of bounce")
+                pass
+        if method != 'def':
+            return img_d.astype(np.uint8)
+
+        if jupyter:
+            display(Image.fromarray(img_d.astype(np.uint8)))
+
+        if store:
+            #store_ar = (img_d* 255).round().astype(np.uint8)
+            #print("IMAGE D:" ,img_d,img_d.shape )
+            save_image(img_d, tag=str(epoch) + '_' + tag, p_store=self.p_visu)
+        if self.writer is not None:
+            self.writer.add_image(tag, img_d.astype(
+                np.uint8), global_step=epoch, dataformats='HWC')
+
     @multiplot
     def plot_bounding_box(self, tag, epoch, img, rmin=0, rmax=0, cmin=0, cmax=0, str_width=2, store=False, jupyter=False, b=None, method='def'):
         """

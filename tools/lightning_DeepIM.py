@@ -526,10 +526,10 @@ class TrackNet6D(LightningModule):
             pass
         avg_val_dis_float = float(avg_dict['avg_val_disparity  [+inf - 0]'])
         return {'avg_val_dis_float': avg_val_dis_float,
-                'avg_val_dis': avg_dict['avg_val_disparity  [+inf - 0]'],
+                'avg_val_dis': torch.tensor( avg_dict['avg_val_disparity  [+inf - 0]'] ),
                 'log': avg_dict}
 
-    def train_epoch_end(self, outputs):
+    def training_epoch_end(self, outputs):
         self._k = 0
         self.counter_images_logged = 0  # reset image log counter
         avg_dict = {}
@@ -539,9 +539,12 @@ class TrackNet6D(LightningModule):
             avg_dict['avg_' +
                      old_key] = float(np.mean(np.array(self._dict_track[old_key])))
             self._dict_track.pop(old_key, None)
-        string = 'Time for one epoch: ' + str(time.time() - self.start)
-        print(string)
+        delta = time.time() - self.start
+        string = f'Time for one epoch: {int( delta/3600) }h, {int( (delta%3600)/60)}min  {int( delta%60) }s'
+        logging.getLogger('lightning').info( string )
+
         self.start = time.time()
+        avg_dict ['learning_rate'] = self.trainer.optimizers[0].param_groups[0]['lr']
         return {**avg_dict, 'log': avg_dict}
 
     def test_epoch_end(self, outputs):

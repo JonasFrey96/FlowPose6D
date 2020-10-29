@@ -437,7 +437,6 @@ class YCB(Backend):
         b = bb_lsd[0]
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
-            print('BB to render')
             return False
 
         K1 = self.get_camera('data_syn/000001', K=True)
@@ -476,7 +475,6 @@ class YCB(Backend):
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
             # TODO invalid sample
-            print('BB to real')
             return False
         center_real = backproject_points(
             init_trans[None], fx=cam[2], fy=cam[3], cx=cam[0], cy=cam[1])
@@ -930,7 +928,7 @@ class YCB(Backend):
                 self.mesh[ idx ] = trimesh.load(pa)
             except:
                 pass
-        print(f'Finished loading meshes {time.time()-st}')
+        # print(f'Finished loading meshes {time.time()-st}')
 
     def get_pcd_cad_models(self):
         p = self._cfg_env['p_ycb_obj']
