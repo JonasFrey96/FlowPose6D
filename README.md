@@ -79,6 +79,10 @@ bsub -Is -n 16 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=4]" -R "select[gpu_mtota
 
 bsub -Is -n 20 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=16000]" bash
 
+bsub -Is -n 40 -W 3:59 -R "rusage[mem=1500,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=8000]" bash
+
+bsub -Is -n 40 -W 3:59 -R "rusage[mem=1500,ngpus_excl_p=4]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=8000]" bash
+
 cd ~/PLR3 && /cluster/home/jonfrey/miniconda3/envs/track3/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/t4h/exp1.yml
 
 cd ~/PLR3 && CUDA_LAUNCH_BLOCKING=1 /cluster/home/jonfrey/miniconda3/envs/track3/bin/python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/exp_ws_deepim_debug_leon.yml

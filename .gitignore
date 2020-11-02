@@ -25,3 +25,4 @@ scripts/viewpoint_manager.ipynb
 yaml/auto*
 .vscode*
 */settings.json
+yaml/exp/t24h/exp24all_df.yml
