@@ -77,6 +77,7 @@ def check_exp(exp):
 
 def get_scale_for_erosion(ero_in):
     res = torch.sum ( ero_in, dim = (2,3))
+    res[res < 1000] = 0
     res[res < 5000] = 5
     res[res < 10000] = 10
     res[res < 30000] = 20
@@ -130,7 +131,7 @@ class TrackNet6D(LightningModule):
 
         # self.pixelwise_refiner = PixelwiseRefiner(
         #     input_channels=6, num_classes=22, growth_rate=16)
-        self.pixelwise_refiner = EfficientDisparity(num_classes=22)
+        self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
 
         # df stands for DenseFusion
         if exp.get('model', {}).get('df_refine', False):
@@ -163,7 +164,6 @@ class TrackNet6D(LightningModule):
 
         self.visualizer = None
         self._dict_track = {}
-        self.up = torch.nn.UpsamplingBilinear2d(size=(480, 640))
         self.number_images_log_test = self.exp.get(
             'visu', {}).get('number_images_log_test', 1)
         self.counter_images_logged = 0
@@ -215,7 +215,8 @@ class TrackNet6D(LightningModule):
         real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
         pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
         u_map, v_map, flow_mask, bb = batch[24:]
-        data = torch.cat([real_img, render_img], dim=1)
+        data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
+        data = data.permute(0,3,1,2) # BS,C,H,W
 
         # TODO idx is currently unused !!!!
         
@@ -247,19 +248,19 @@ class TrackNet6D(LightningModule):
             t_size = get_scale_for_erosion(ero_in).type( u_map.dtype )
             ero_out = eroision_batch(ero_in,t_size).type( u_map.dtype )
             fmt = flow_mask.dtype
-            flow_mask  = (flow_mask * ero_out.type(torch.float32)).type(fmt)[:,0]
+            flow_mask_ero  = (flow_mask * ero_out.type(torch.float32)).type(fmt)[:,0]
 
             P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
                 copy.deepcopy(real_tl[b]), 
                 copy.deepcopy(ren_br[b]), 
                 copy.deepcopy(ren_tl[b]), 
-                copy.deepcopy(flow_mask[b]), 
+                copy.deepcopy(flow_mask_ero[b]), 
                 copy.deepcopy(u_map[b].type( typ )), 
                 copy.deepcopy(v_map[b].type( typ )), 
                 copy.deepcopy(K_real.type( typ )), 
                 copy.deepcopy(self.K_ren.type( typ )), 
-                copy.deepcopy(real_d[b][0].type( typ )), 
-                copy.deepcopy(render_d[b][0].type( typ )), 
+                copy.deepcopy(real_d[b].type( typ )), 
+                copy.deepcopy(render_d[b].type( typ )), 
                 copy.deepcopy(h_real_est.type( typ )), 
                 copy.deepcopy(h_render[b].type( typ )))
 
@@ -281,8 +282,8 @@ class TrackNet6D(LightningModule):
                 flow[b, 1, :, :].type( typ ), 
                 K_real.type( typ ), 
                 self.K_ren.type( typ ), 
-                real_d[b][0].type( typ ), 
-                render_d[b][0].type( typ ), 
+                real_d[b].type( typ ), 
+                render_d[b].type( typ ), 
                 h_real_est.type( typ ), 
                 h_render[b].type( typ ))
 
@@ -303,8 +304,8 @@ class TrackNet6D(LightningModule):
                 flow[b, 1, :, :].type( typ ), 
                 K_real.type( typ ), 
                 self.K_ren.type( typ ), 
-                real_d[b][0].type( typ ), 
-                render_d[b][0].type( typ ), 
+                real_d[b].type( typ ), 
+                render_d[b].type( typ ), 
                 h_real_est.type( typ ), 
                 h_render[b].type( typ ))
             h_real_pred_flow_and_mask =  T_res @ h_render[0] # set rotation
@@ -317,15 +318,15 @@ class TrackNet6D(LightningModule):
             self.visualizer.plot_translations(
                 tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
                 epoch = self.current_epoch,
-                img = real_img[0].permute(1, 2, 0).cpu(),
+                img = real_img[0].cpu(),
                 flow = uv_gt.permute(0,2,3,1)[0].cpu(),
                 mask=mask[0].cpu(),
                 store=True,
                 method= 'left')
             self.visualizer.plot_translations(
-                tag = f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
+                tag = f'Predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
                 epoch = self.current_epoch,
-                img = real_img[0].permute(1, 2, 0).cpu(),
+                img = real_img[0].cpu(),
                 flow = flow[0, :2, :, :].permute(1, 2, 0).cpu(),
                 mask=mask[0].cpu(),
                 store=True,
@@ -334,14 +335,14 @@ class TrackNet6D(LightningModule):
             
             self.visualizer.plot_segmentation(tag=f'_',
                                                 epoch=self.current_epoch,
-                                                label=flow_mask[0].type(torch.long).cpu(
+                                                label=flow_mask_ero[b].type(torch.bool).cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='left')
             
-            self.visualizer.plot_segmentation(tag=f'Valid Flow_(left dataloader eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
+            self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
-                                                label=valid_flow[b].type(torch.long).cpu(
+                                                label=valid_flow[b].type(torch.bool).cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='right')
@@ -349,34 +350,34 @@ class TrackNet6D(LightningModule):
             seg_max = p_label.argmax(dim=1)
             self.visualizer.plot_segmentation(tag=f'_',
                                                 epoch=self.current_epoch,
-                                                label=gt_label_cropped[0].cpu(
+                                                label=gt_label_cropped[b].cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='left')
             
             self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
-                                                label=seg_max[0].cpu(
+                                                label=seg_max[b].cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='right')
     
             self.visualizer.plot_corrospondence(tag=f'_',
                                                 epoch=self.current_epoch,
-                                                u_map=u_map[0], 
-                                                v_map=v_map[0], 
-                                                flow_mask=flow_mask[0], 
-                                                real_img=real_img[0], 
-                                                render_img=render_img[0],
+                                                u_map=u_map[b], 
+                                                v_map=v_map[b], 
+                                                flow_mask=flow_mask[b], 
+                                                real_img=real_img[b], 
+                                                render_img=render_img[b],
                                                 store=True,
                                                 method='left')
             self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
-                                                u_map= flow[0,0,:,:], 
-                                                v_map= flow[0,1,:,:], 
-                                                flow_mask=flow_mask[0], 
-                                                real_img=real_img[0], 
-                                                render_img=render_img[0],
+                                                u_map= flow[b,0,:,:], 
+                                                v_map= flow[b,1,:,:], 
+                                                flow_mask=flow_mask[b], 
+                                                real_img=real_img[b], 
+                                                render_img=render_img[b],
                                                 store=True,
                                                 method='right')
             
@@ -491,6 +492,7 @@ class TrackNet6D(LightningModule):
     def on_validation_epoch_start(self):
         self.counter_images_logged = 0
         self._mode = 'val'
+
     def validation_step(self, batch, batch_idx):
         st = time.time()
         self._mode = 'val'
@@ -664,7 +666,10 @@ class TrackNet6D(LightningModule):
                      old_key] = float(np.mean(np.array(self._dict_track[old_key])))
             self._dict_track.pop(old_key, None)
         delta = time.time() - self.start
-        string = f'Time for one epoch: {int( delta/3600) }h, {int( (delta%3600)/60)}min  {int( delta%60) }s'
+        v= self.exp['trainer']['limit_val_batches']
+        t= self.exp['trainer']['limit_test_batches']
+        bs = self.exp['loader']['batch_size']
+        string = f'Time for one epoch: {int( delta/3600) }h, {int( (delta%3600)/60)}min  {int( delta%60) }s, Val: {v}, Test: {t}, BS: {bs}, Total:{(v+t)*bs}'
         logging.getLogger('lightning').info( string )
 
         self.start = time.time()

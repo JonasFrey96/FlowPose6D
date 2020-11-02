@@ -1,10 +1,4 @@
 model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/deep_im/debug"
-estimator_restore: true
-estimator_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
-refiner_restore: false
-refiner_load: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
-restore_deepim_refiner: "/cluster/work/riner/users/PLR-2020/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
-
 mail: false
 model_mode: fit
 
@@ -79,7 +73,10 @@ visu:
   number_images_log_val: 5
   network_input_batch: False
   log_to_file: False
-  always_calculate: True
+  always_calculate: False
+  full_val: True
+
+
 
 early_stopping_cfg:
   patience: 100
