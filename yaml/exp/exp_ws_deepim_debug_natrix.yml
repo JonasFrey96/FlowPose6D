@@ -1,14 +1,9 @@
 model_path: "/media/scratch1/jonfrey/models/runs/efficient_disparity/debug/_" #overfit_1_batch_bs_1
-estimator_restore: false
-estimator_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
-refiner_restore: false
-refiner_load: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
-restore_deepim_refiner: "/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar"
 
-checkpoint_restore: false
-checkpoint_load: "/media/scratch1/jonfrey/models/runs/pixelwise_refinement/overfit_one_batch_long/2020-09-30T16:12:16__/epoch=7-avg_val_dis_float=0.4104.ckpt"
+checkpoint_restore: true
+checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_obj2/epoch=7-avg_val_dis_float=12.9083.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
-model_mode: fit
+model_mode: fit #test
 
 model:
   df_load: False
@@ -30,8 +25,13 @@ model:
     render_depth_mask: True
   sem_seg: True
 
+efficient_disp_cfg:
+  num_classes: 22 
+  backbone: 'efficientnet-b1'
+  connections_encoder_decoder: 3 # number of residual connections
+
 loss:
-  weight_semantic_segmentation: 1
+  weight_semantic_segmentation: 10
   weight_flow: 1
   weight_pose: 0
   weight_trans: 1
@@ -59,9 +59,9 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 5
-  limit_val_batches: 5
-  limit_test_batches: 5
+  limit_train_batches: 50
+  limit_val_batches: 50
+  limit_test_batches: 10
   progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false
@@ -76,12 +76,13 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 5
-  number_images_log_test: 5
-  number_images_log_val: 5
+  number_images_log_train: 2
+  number_images_log_test: 2
+  number_images_log_val: 2
   network_input_batch: False
   log_to_file: False
   always_calculate: False
+  full_val: True
 
 early_stopping_cfg:
   patience: 100
@@ -98,7 +99,8 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: null #null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
+  obj_list_fil:  #null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
+    - 2
   obj_list_sym:
     - 12
     - 15
@@ -110,15 +112,15 @@ d_test:
     seq_length: 1
     fixed_length: true
     sub_sample: 1
-    mode: "test" #dense_fusion_test
+    mode: "dense_fusion_test" #dense_fusion_test
     add_syn_to_train: false
   noise_cfg:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.04
+    noise_translation: 0.02
     noise_rotation: 20
     return_same_size_tensors: true
     force_one_object_visible: true
@@ -166,7 +168,7 @@ d_train:
     no_list_for_sequence_len_one: True
     fixed_length: true
     sub_sample: 1
-    mode: "train"
+    mode: "dense_fusion_train"
     add_syn_to_train: true
   noise_cfg:
     status: false

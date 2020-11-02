@@ -75,11 +75,32 @@ def check_exp(exp):
         print('Overfitting on ONE batch is activated')
         time.sleep(5)
 
+def get_scale_for_erosion(ero_in):
+    res = torch.sum ( ero_in, dim = (2,3))
+    res[res < 1000] = 0
+    res[res < 5000] = 5
+    res[res < 10000] = 10
+    res[res < 30000] = 20
+    res[res < 40000] = 25
+    res[res < 50000] = 30
+    res[res >= 50000] = 40
+    return res
+
+def eroision_batch(t,t_size):
+    "t: tensor shape BS, C, H,W"
+    "t_size: tensor shape BS"
+    out_c = t.shape[1]
+    for b in range( t.shape[0] ):
+        size = int( t_size[b] )
+        kernel_tensor = torch.ones( (out_c,1,size,size) , device= t.device, dtype = t.dtype)
+        t[b] = (torch.nn.functional.conv2d(t[b][None], kernel_tensor, padding=(int((size)/2), int((size)/2))) == (size*size))[0,:,:t.shape[2], :t.shape[3]]
+    return t
+
 
 class TrackNet6D(LightningModule):
     def __init__(self, exp, env):
         super().__init__()
-        self._mode = 'init'
+        self._mode = 'test'
 
         # check exp for errors
         check_exp(exp)
@@ -110,7 +131,7 @@ class TrackNet6D(LightningModule):
 
         # self.pixelwise_refiner = PixelwiseRefiner(
         #     input_channels=6, num_classes=22, growth_rate=16)
-        self.pixelwise_refiner = EfficientDisparity(num_classes=22)
+        self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
 
         # df stands for DenseFusion
         if exp.get('model', {}).get('df_refine', False):
@@ -143,7 +164,6 @@ class TrackNet6D(LightningModule):
 
         self.visualizer = None
         self._dict_track = {}
-        self.up = torch.nn.UpsamplingBilinear2d(size=(480, 640))
         self.number_images_log_test = self.exp.get(
             'visu', {}).get('number_images_log_test', 1)
         self.counter_images_logged = 0
@@ -151,9 +171,6 @@ class TrackNet6D(LightningModule):
 
         mp = exp['model_path']
         fh = logging.FileHandler(f'{mp}/Live_Logger_Lightning.log')
-
-        # log = open(f'{mp}/Live_Logger_Lightning.log', "a")
-        # sys.stdout = log
 
         fh.setLevel(logging.DEBUG)
         self.start = time.time()
@@ -166,6 +183,7 @@ class TrackNet6D(LightningModule):
             log = open(f'{mp}/Live_Logger_Lightning.log', "a")
             sys.stdout = log
             print('Logging to File')
+        self.adds_mets = ['init','res_gt_flow','res_pred_flow','res_pred2_flow_and_mask']
 
     def forward(self, batch):
         st = time.time()
@@ -197,7 +215,8 @@ class TrackNet6D(LightningModule):
         real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
         pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
         u_map, v_map, flow_mask, bb = batch[24:]
-        data = torch.cat([real_img, render_img], dim=1)
+        data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
+        data = data.permute(0,3,1,2) # BS,C,H,W
 
         # TODO idx is currently unused !!!!
         
@@ -212,9 +231,8 @@ class TrackNet6D(LightningModule):
         flow_loss = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
         if torch.any( torch.sum( ind[:,0,:,:], (1,2)) < 30 ): 
             print( 'Invalid Flow Mask' )
-        if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ): 
+        if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
             real_tl, real_br, ren_tl, ren_br = bb 
-            K_ren = torch.tensor( self.trainer.val_dataloaders[0].dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
 
             b = 0
             K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]], device=self.device )
@@ -225,20 +243,24 @@ class TrackNet6D(LightningModule):
             
             typ = u_map.dtype
         
-            
-            anal_tensor( real_br, 'real_br', print_on_error = True)
-            anal_tensor( real_tl, 'real_tl', print_on_error = True)
+            # Calculate erroded gt_labels
+            ero_in = (gt_label_cropped ==  unique_desig[1][:,None,None].repeat(1,480,640)   )[:,None,:,:].type(u_map.dtype) # BS,C,H,w
+            t_size = get_scale_for_erosion(ero_in).type( u_map.dtype )
+            ero_out = eroision_batch(ero_in,t_size).type( u_map.dtype )
+            fmt = flow_mask.dtype
+            flow_mask_ero  = (flow_mask * ero_out.type(torch.float32)).type(fmt)[:,0]
+
             P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
                 copy.deepcopy(real_tl[b]), 
                 copy.deepcopy(ren_br[b]), 
                 copy.deepcopy(ren_tl[b]), 
-                copy.deepcopy(flow_mask[b]), 
+                copy.deepcopy(flow_mask_ero[b]), 
                 copy.deepcopy(u_map[b].type( typ )), 
                 copy.deepcopy(v_map[b].type( typ )), 
                 copy.deepcopy(K_real.type( typ )), 
-                copy.deepcopy(K_ren.type( typ )), 
-                copy.deepcopy(real_d[b][0].type( typ )), 
-                copy.deepcopy(render_d[b][0].type( typ )), 
+                copy.deepcopy(self.K_ren.type( typ )), 
+                copy.deepcopy(real_d[b].type( typ )), 
+                copy.deepcopy(render_d[b].type( typ )), 
                 copy.deepcopy(h_real_est.type( typ )), 
                 copy.deepcopy(h_render[b].type( typ )))
 
@@ -259,14 +281,34 @@ class TrackNet6D(LightningModule):
                 flow[b, 0, :, :].type( typ ), 
                 flow[b, 1, :, :].type( typ ), 
                 K_real.type( typ ), 
-                K_ren.type( typ ), 
-                real_d[b][0].type( typ ), 
-                render_d[b][0].type( typ ), 
+                self.K_ren.type( typ ), 
+                real_d[b].type( typ ), 
+                render_d[b].type( typ ), 
                 h_real_est.type( typ ), 
                 h_render[b].type( typ ))
 
 
             h_real_new_est_pred_flow =  T_res @ h_render[0] # set rotation
+
+            # Calculate erroded perdicted labels
+            seg_max = p_label.argmax(dim=1)
+            ero_in = (seg_max ==  unique_desig[1][:,None,None].repeat(1,480,640)   )[:,None,:,:].type(u_map.dtype) # BS,C,H,w
+            t_size = get_scale_for_erosion(ero_in).type( u_map.dtype )
+            valid_flow = eroision_batch(ero_in,t_size).type( torch.bool )[:,0]
+            _,_,_ , T_res = flow_to_trafo(real_br[b], 
+                real_tl[b],
+                ren_br[b], 
+                ren_tl[b], 
+                valid_flow[b], 
+                flow[b, 0, :, :].type( typ ), 
+                flow[b, 1, :, :].type( typ ), 
+                K_real.type( typ ), 
+                self.K_ren.type( typ ), 
+                real_d[b].type( typ ), 
+                render_d[b].type( typ ), 
+                h_real_est.type( typ ), 
+                h_render[b].type( typ ))
+            h_real_pred_flow_and_mask =  T_res @ h_render[0] # set rotation
         
         if self.visu_forward:
             self._k += 1
@@ -276,52 +318,66 @@ class TrackNet6D(LightningModule):
             self.visualizer.plot_translations(
                 tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
                 epoch = self.current_epoch,
-                img = real_img[0].permute(1, 2, 0).cpu(),
+                img = real_img[0].cpu(),
                 flow = uv_gt.permute(0,2,3,1)[0].cpu(),
                 mask=mask[0].cpu(),
                 store=True,
                 method= 'left')
             self.visualizer.plot_translations(
-                tag = f'predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
+                tag = f'Predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
                 epoch = self.current_epoch,
-                img = real_img[0].permute(1, 2, 0).cpu(),
+                img = real_img[0].cpu(),
                 flow = flow[0, :2, :, :].permute(1, 2, 0).cpu(),
                 mask=mask[0].cpu(),
                 store=True,
                 method= 'right')
 
-                
+            
+            self.visualizer.plot_segmentation(tag=f'_',
+                                                epoch=self.current_epoch,
+                                                label=flow_mask_ero[b].type(torch.bool).cpu(
+                                                ).numpy(),
+                                                store=True,
+                                                method='left')
+            
+            self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
+                                                epoch=self.current_epoch,
+                                                label=valid_flow[b].type(torch.bool).cpu(
+                                                ).numpy(),
+                                                store=True,
+                                                method='right')
+
             seg_max = p_label.argmax(dim=1)
             self.visualizer.plot_segmentation(tag=f'_',
                                                 epoch=self.current_epoch,
-                                                label=gt_label_cropped[0].cpu(
+                                                label=gt_label_cropped[b].cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='left')
             
             self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
-                                                label=seg_max[0].cpu(
+                                                label=seg_max[b].cpu(
                                                 ).numpy(),
                                                 store=True,
                                                 method='right')
     
             self.visualizer.plot_corrospondence(tag=f'_',
                                                 epoch=self.current_epoch,
-                                                u_map=u_map[0], 
-                                                v_map=v_map[0], 
-                                                flow_mask=flow_mask[0], 
-                                                real_img=real_img[0], 
-                                                render_img=render_img[0],
+                                                u_map=u_map[b], 
+                                                v_map=v_map[b], 
+                                                flow_mask=flow_mask[b], 
+                                                real_img=real_img[b], 
+                                                render_img=render_img[b],
                                                 store=True,
                                                 method='left')
             self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
                                                 epoch=self.current_epoch,
-                                                u_map= flow[0,0,:,:], 
-                                                v_map= flow[0,1,:,:], 
-                                                flow_mask=flow_mask[0], 
-                                                real_img=real_img[0], 
-                                                render_img=render_img[0],
+                                                u_map= flow[b,0,:,:], 
+                                                v_map= flow[b,1,:,:], 
+                                                flow_mask=flow_mask[b], 
+                                                real_img=real_img[b], 
+                                                render_img=render_img[b],
                                                 store=True,
                                                 method='right')
             
@@ -378,11 +434,13 @@ class TrackNet6D(LightningModule):
                                         K = K_real.cpu().numpy(),
                                         H = h_real_new_est_pred_flow.detach().cpu().numpy(),
                                         method='right')
-        if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ): 
+        if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
             target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,model_points.shape[1],1)
             # Compute ADD-S
             adds_res_gt_flow = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_new_est[None].type( target.dtype) )
             adds_res_pred_flow = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_new_est_pred_flow[None].type( target.dtype))
+            adds_res_pred2_flow_and_mask = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_pred_flow_and_mask[None].type( target.dtype))
+            
             adds_init = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_est[None].type( target.dtype))
 
             # adds_gt = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real[0][None])
@@ -390,6 +448,7 @@ class TrackNet6D(LightningModule):
             log_scalars[f'adds_init'] = float(adds_init.detach())
             log_scalars[f'adds_res_gt_flow'] = float(adds_res_gt_flow.detach())
             log_scalars[f'adds_res_pred_flow'] = float(adds_res_pred_flow.detach())
+            log_scalars[f'adds_res_pred2_flow_and_mask'] = float(adds_res_pred2_flow_and_mask.detach())
             
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
@@ -433,6 +492,7 @@ class TrackNet6D(LightningModule):
     def on_validation_epoch_start(self):
         self.counter_images_logged = 0
         self._mode = 'val'
+
     def validation_step(self, batch, batch_idx):
         st = time.time()
         self._mode = 'val'
@@ -461,8 +521,7 @@ class TrackNet6D(LightningModule):
         for i in range(0, bs):
             # object loss for each object
             obj = int(unique_desig[1][i])
-            obj = list(
-                self.trainer.val_dataloaders[0].dataset._backend._name_to_idx_full.keys())[obj - 1]
+            obj = self.obj_list[obj - 1]
             if f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]' in self._dict_track.keys():
                 self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'].append(
                     float(dis[i]))
@@ -470,10 +529,10 @@ class TrackNet6D(LightningModule):
                 self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'] = [
                     float(dis[i])]
         
-        adds_mets = ['init','res_gt_flow','res_pred_flow']
-        for n in adds_mets:
+        
+        for n in self.adds_mets:
             try:
-                na = f'val_avg_ADDS_{n} (only for first obj in batch) [+inf - 0]' 
+                na = f'val_adds_dis_{n} (only for first obj in batch) [+inf - 0]' 
                 value = log_scalars[f'adds_{n}'] 
                 if na in self._dict_track.keys():
                     self._dict_track[na].append( value )
@@ -489,6 +548,73 @@ class TrackNet6D(LightningModule):
         val_dis = loss
         return {'val_loss': val_loss, 'val_dis': val_dis, 'log': tensorboard_logs}
    
+    def on_test_epoch_start(self):
+        self.counter_images_logged = 0
+        self._mode = 'test'
+
+    def test_step(self, batch, batch_idx):
+        st = time.time()
+        unique_desig = batch[0][12]
+        total_loss = 0
+        total_dis = 0
+
+        nr = self.exp.get('visu', {}).get(f'number_images_log_{self._mode}', 1)
+        if self.counter_images_logged < nr:
+            self.visu_forward = True
+        else:
+            self.visu_forward = False
+
+        # forward
+        dis, log_scalars = self(batch[0])
+        bs = dis.shape[0]
+        
+        # aggregate statistics per object (ADD-S sym and ADD non sym)
+        loss = torch.mean(dis)
+        try:
+            self._dict_track[f'{self._mode}_disparity  [+inf - 0]'].append(float(loss))
+        except:
+            self._dict_track[f'{self._mode}_disparity  [+inf - 0]'] = [float(loss)]
+        
+        for i in range(0, bs):
+            # object loss for each object
+            obj = int(unique_desig[1][i])
+            obj = self.obj_list[obj - 1]
+            if f'{self._mode}_{obj}_avg_disparity_L2_dis  [+inf - 0]' in self._dict_track.keys():
+                self._dict_track[f'{self._mode}_{obj}_avg_disparity_L2_dis  [+inf - 0]'].append(
+                    float(dis[i]))
+            else:
+                self._dict_track[f'{self._mode}_{obj}_avg_disparity_L2_dis  [+inf - 0]'] = [
+                    float(dis[i])]
+
+
+        for n in self.adds_mets:
+            try:
+                obj = int(unique_desig[1][0])
+                obj = self.obj_list[obj - 1]
+
+                na = f'{self._mode}_{n}adds_dis [+inf - 0]' 
+                na_obj =  f'{self._mode}_{obj}_{n}adds_dis [+inf - 0]' 
+
+                value = log_scalars[f'adds_{n}'] 
+
+                if na in self._dict_track.keys():
+                    self._dict_track[na].append( value )
+                else:
+                    self._dict_track[na] = [value]
+
+                if na_obj in self._dict_track.keys():
+                    self._dict_track[na_obj].append( value )
+                else:
+                    self._dict_track[na_obj] = [value]
+            except:
+                pass            
+
+        tensorboard_logs = {f'{self._mode}_disparity': float(loss)}
+        tensorboard_logs = {**tensorboard_logs, **log_scalars}
+
+        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs}
+   
+
     def visu_step(self, nr, batch, pred_r, pred_t, batch_idx):
         pass
 
@@ -540,7 +666,10 @@ class TrackNet6D(LightningModule):
                      old_key] = float(np.mean(np.array(self._dict_track[old_key])))
             self._dict_track.pop(old_key, None)
         delta = time.time() - self.start
-        string = f'Time for one epoch: {int( delta/3600) }h, {int( (delta%3600)/60)}min  {int( delta%60) }s'
+        v= self.exp['trainer']['limit_val_batches']
+        t= self.exp['trainer']['limit_test_batches']
+        bs = self.exp['loader']['batch_size']
+        string = f'Time for one epoch: {int( delta/3600) }h, {int( (delta%3600)/60)}min  {int( delta%60) }s, Val: {v}, Test: {t}, BS: {bs}, Total:{(v+t)*bs}'
         logging.getLogger('lightning').info( string )
 
         self.start = time.time()
@@ -567,19 +696,35 @@ class TrackNet6D(LightningModule):
 
             self._dict_track.pop(old_key, None)
 
-        avg_test_dis_float = float(avg_dict['avg_test_loss  [+inf - 0]'])
+        def filter_dict( dic, remove_key):
+            new_dict = {}
+            for k in list( dic.keys()):
+                if k.find(remove_key) != -1 and k.find('auc') != -1 :
+                    nk = k 
+                    nk = nk.replace(remove_key+' ', '')
+                    nk = nk.replace(remove_key, '')
+                    print(nk)
+                    new_dict[ nk ] = dic[k]
+            return new_dict
+        
+        avg_test_dis_float = float(avg_dict['avg_test_disparity  [+inf - 0]'])
+        try:
+            for n in self.adds_mets:
+                avg_in = filter_dict( avg_dict, n )
+                df1 = dict_to_df(avg_in)
+                # test_002_master_chef_can_res_gt_flow_auc [0 - 100]
 
-        df1 = dict_to_df(avg_dict)
-        df2 = dict_to_df(get_df_dict(pre='test'))
-        img = compare_df(df1, df2, key='auc [0 - 100]')
-        tag = 'test_table_res_vs_df'
-        img.save(self.exp['model_path'] +
-                 f'/visu/{self.current_epoch}_{tag}.png')
-        self.logger.experiment.add_image(tag, np.array(img).astype(
-            np.uint8), global_step=self.current_epoch, dataformats='HWC')
-
-        return {'avg_test_dis_float': avg_test_dis_float,
-                'avg_test_dis': avg_dict['avg_test_loss  [+inf - 0]'],
+                df2 = dict_to_df(get_df_dict(pre='test'))
+                img = compare_df(df1, df2, key='auc [0 - 100]')
+                tag = f'test_table_res_{n}_vs_df'
+                img.save(self.exp['model_path'] +
+                        f'/visu/{self.current_epoch}_{tag}.png')
+                self.logger.experiment.add_image(tag, np.array(img).astype(
+                    np.uint8), global_step=self.current_epoch, dataformats='HWC')
+        except:
+            pass
+        return {f'avg_test_dis_float': avg_test_dis_float,
+                f'avg_test_dis': avg_dict['avg_test_disparity  [+inf - 0]'],
                 'log': avg_dict}
 
     def visu_pose(self, batch_idx, pred_r, pred_t, target, model_points, cam, img_orig, unique_desig, idx, store=True):
@@ -615,23 +760,17 @@ class TrackNet6D(LightningModule):
 
         return dataloader_train
 
-    # def test_dataloader(self):
-    #     dataset_test = GenericDataset(
-    #         cfg_d=self.exp['d_test'],
-    #         cfg_env=self.env)
-    #     store = self.env['p_ycb'] + '/viewpoints_renderings'
-    #     if self.vm is None:
-    #         self.vm = ViewpointManager(
-    #             store=store,
-    #             name_to_idx=dataset_test._backend._name_to_idx,
-    #             nr_of_images_per_object=self.exp.get(
-    #                 'vm', {}).get('nr_of_images_per_object', 1000),
-    #             device=self.device,
-    #             load_images=self.exp.get('vm', {}).get('load_images', False))
+    def test_dataloader(self):
+        dataset_test = GenericDataset(
+            cfg_d=self.exp['d_test'],
+            cfg_env=self.env)
+        store = self.env['p_ycb'] + '/viewpoints_renderings'
 
-    #     dataloader_test = torch.utils.data.DataLoader(dataset_test,
-    #                                                   **self.exp['loader'])
-    #     return dataloader_test
+        dataloader_test = torch.utils.data.DataLoader(dataset_test,
+                                                      **self.exp['loader'])
+        self.K_ren = torch.tensor( dataloader_test.dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
+        self.obj_list = list( dataloader_test.dataset._backend._name_to_idx_full.keys()) 
+        return dataloader_test
 
     def val_dataloader(self):
         dataset_val = GenericDataset(
@@ -648,6 +787,9 @@ class TrackNet6D(LightningModule):
             dataset_val, self.indices_valid)
         dataloader_val = torch.utils.data.DataLoader(dataset_val,
                                                      **self.exp['loader'])
+        self.K_ren = torch.tensor( dataloader_val.dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
+        self.obj_list = list( dataloader_val.dataset._backend._name_to_idx_full.keys()) 
+
         return dataloader_val
 
 

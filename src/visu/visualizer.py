@@ -29,7 +29,8 @@ from math import pi
 jet = cm.get_cmap('jet')
 SEG_COLORS = (np.stack([jet(v)
                         for v in np.linspace(0, 1, 22)]) * 255).astype(np.uint8)
-
+SEG_COLORS_BIN = (np.stack([jet(v)
+                        for v in np.linspace(0, 1, 2)]) * 255).astype(np.uint8)
 
 def backproject_points(p, fx, fy, cx, cy):
     """
@@ -114,7 +115,8 @@ class Visualizer():
                           mask,
                           store=False,
                           jupyter=False,
-                          method='def'):
+                          method='def',
+                          min_points=50):
         """
         img torch.tensor(h,w,3)
         flow torch.tensor(h,w,2)
@@ -135,6 +137,10 @@ class Visualizer():
 
         rot_bin, amp = bin_dir_amplitude(flow)
         s = 20
+
+        while torch.sum(mask[::s,::s]) < min_points and s > 1:
+            s -= 1
+
         a = 2 if s > 15 else 1
         pil_img = Image.fromarray(img.numpy().astype(np.uint8), 'RGB')
         draw = ImageDraw.Draw(pil_img)
@@ -253,14 +259,20 @@ Vertical, pos down | neg up:
             self.writer.add_image(tag, img_f.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
     @multiplot
-    def plot_segmentation(self, tag, epoch, label, store,method='def'):
+    def plot_segmentation(self, tag, epoch, label, store, method='def'):
+        if label.dtype == np.bool:
+            col_map = SEG_COLORS_BIN
+        else:
+            col_map = SEG_COLORS
+
+
         if label.dtype == np.float32:
             label = label.round()
         image_out = np.zeros(
             (label.shape[0], label.shape[1], 3), dtype=np.uint8)
         for h in range(label.shape[0]):
             for w in range(label.shape[1]):
-                image_out[h, w, :] = SEG_COLORS[int(label[h, w])][:3]
+                image_out[h, w, :] = col_map[int(label[h, w])][:3]
         
         if method != 'def':
             return image_out.astype(np.uint8)
@@ -569,8 +581,20 @@ Vertical, pos down | neg up:
                 tag, plot_img_np, global_step=epoch, dataformats='HWC')
         plt.close()
     @multiplot
-    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False, method='def', res_h =30, res_w=30):
-        cropped_comp = np.swapaxes( np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=2).astype(np.uint8).T,0,1)
+
+    def plot_corrospondence(self, tag, epoch, u_map, v_map, flow_mask, real_img, render_img, store=False, jupyter=False, coloful = False, method='def', res_h =30, res_w=30, min_points=50):
+        """Plot Matching Points on Real and Render Image
+
+        Args:
+            tag ([string]): 
+            epoch (int): 
+            u_map (torch.tensor dtype float): H,W 
+            v_map (torch.tensor dtype float): H,W
+            flow_mask (torch.tensor dtype bool): H,W
+            real_img (torch.tensor dtype float): H,W,3
+            render_img (torch.tensor dtype float): H,W,3
+        """     
+        cropped_comp = np.concatenate( [real_img.cpu().numpy(), render_img.cpu().numpy() ], axis=1).astype(np.uint8)
         cropped_comp_img = Image.fromarray(cropped_comp)
         draw = ImageDraw.Draw(cropped_comp_img)
 
@@ -593,6 +617,11 @@ Flow in Vertical:
         w = 640
         h = 480
         col = (0,255,0)
+
+        while torch.sum(flow_mask[::res_h,::res_w]) < min_points and res_h > 1:
+            res_w -= 1
+            res_h -= 1
+
         for _w in range(0,w,res_w):
             for _h in range(0,h,res_h): 
 
@@ -685,9 +714,13 @@ Flow in Vertical:
 
 
 def plot_pcd(x, point_size=0.005, c='g'):
-    """
-    x: point_nr,3
-    """
+    """[summary]
+
+    Args:
+        x ([type]): point_nr,3
+        point_size (float, optional): [description]. Defaults to 0.005.
+        c (str, optional): [description]. Defaults to 'g'.
+    """    
     if c == 'b':
         k = 245
     elif c == 'g':

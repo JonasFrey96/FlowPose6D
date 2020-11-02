@@ -354,7 +354,7 @@ class YCB(Backend):
         gt_trans = np.squeeze(target_t + add_t, 0)
         unique_desig = (desig, obj_idx)
 
-        tup = tup + (gt_rot_wxyz, gt_trans, unique_desig)
+        tup = tup + (torch.from_numpy(gt_rot_wxyz).type(torch.float32), torch.from_numpy(gt_trans).type(torch.float32), unique_desig)
 
         if self._use_vm:
             # print('time to get flow:', time.time()-st)
@@ -382,6 +382,36 @@ class YCB(Backend):
         return tup
 
     def get_rendered_data(self, batch, h_real, obj_idx, label,cam_flag):
+        """Get Rendered Data
+
+        Args:
+            batch ([type]): [description]
+            h_real ([type]): [description]
+            obj_idx ([type]): [description]
+            label ([type]): [description]
+            cam_flag ([type]): [description]
+
+        Raises:
+            Exception: [description]
+
+        Returns:
+            real_img ([torch.tensor torch.float32]): H,W,3
+            render_img ([torch.tensor torch.float32]): H,W,3
+            real_d ([torch.tensor torch.float32]): H,W
+            render_d ([torch.tensor torch.float32]): H,W
+            gt_label_cropped ([torch.tensor torch.long]): H,W
+            init_rot_wxyz ([torch.tensor torch.float32]): 4
+            init_trans ([torch.tensor torch.float32]): 3
+            pred_points ([torch.tensor torch.float32]): NR-Points,3  int = 0, Initaly predicted points 
+            h_render ([torch.tensor torch.float32]): 4,4
+            h_real ([torch.tensor torch.float32]): 4,4
+            img_ren ([torch.tensor torch.float32]): H,W,3
+            u_cropped_scaled ([torch.tensor torch.float32]): H,W
+            v_cropped_scaled([torch.tensor torch.float32]): H,W
+            valid_flow_mask_cropped([torch.tensor torch.bool]): H,W
+            bb ([tuple]) containing torch.tensor( real_tl, dtype=torch.int32) , torch.tensor( real_br, dtype=torch.int32) , torch.tensor( ren_tl, dtype=torch.int32) , torch.tensor( ren_br, dtype=torch.int32 ) 
+        """        
+
         h = 480
         w = 640
         nt = self._cfg_d['output_cfg'].get('noise_translation', 0.03) 
@@ -421,12 +451,10 @@ class YCB(Backend):
                     raise Exception
 
         init_rot_mat = r2[None]
-        
         init_rot_wxyz = torch.tensor( re_quat( R.from_matrix(init_rot_mat).as_quat()[0], 'xyzw') )
         
         # transform points
         pred_points = torch.add((model_points @ init_rot_mat[0].T), init_trans)
-        
         
         render_img = torch.zeros((3, h, w))
         render_d = torch.empty((1, h, w))
@@ -439,7 +467,7 @@ class YCB(Backend):
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
             return False
 
-        K1 = self.get_camera('data_syn/000001', K=True)
+        K1 = self.get_camera('data_syn/0019', K=True)
         center_ren = backproject_points(
             h_render[0, :3, 3].view(1, 3), fx=K1[0,0], fy=K1[1,1], cx=K1[0,2], cy=K1[1,2])
         center_ren = center_ren.squeeze()
@@ -451,19 +479,9 @@ class YCB(Backend):
         ren_w = b.width()
         ren_tl = b.tl
         b_ren = copy.deepcopy(b)
-        crop_ren = b.crop(img_ren[0]).unsqueeze(0)
-        crop_ren = torch.transpose(crop_ren, 1, 3)
-        crop_ren = torch.transpose(crop_ren, 2, 3)
-        render_img = self.up(crop_ren)[0, :, :]
 
-        _d = depth.transpose(0, 2)
-        _d = _d.transpose(0, 1)
-        crop_d = b.crop(_d.type(
-            torch.float32))
-
-        crop_d = torch.transpose(crop_d, 0, 2)
-        crop_d = torch.transpose(crop_d, 1, 2)
-        render_d = self.up_nearest(crop_d[None])[0, :, :]
+        render_img = b.crop(img_ren[0], scale=True, mode="bilinear") # Input H,W,C
+        render_d = b.crop(depth[0][:,:,None], scale=True, mode="nearest") # Input H,W,C
 
         # real data
         u_cropped = torch.zeros((h, w), dtype=torch.long)
@@ -488,24 +506,14 @@ class YCB(Backend):
         real_w = b.width()
         real_tl = b.tl
         b_real = copy.deepcopy(b)
-        
-        crop_real = b.crop(img_orig).unsqueeze(0)
-        crop_real = torch.transpose(crop_real, 1, 3)
-        crop_real = torch.transpose(crop_real, 2, 3)
-        real_img = self.up(crop_real)[0]
+        real_img = b.crop(img_orig, scale=True, mode="bilinear")
+        real_d = b.crop(depth_img[:, :, None].type(
+            torch.float32), scale=True, mode="nearest")
 
-        crop_d = b.crop(depth_img[:, :, None].type(
-            torch.float32))[None]
-        crop_d = torch.transpose(crop_d, 1, 3)
-        crop_d = torch.transpose(crop_d, 2, 3)
-        real_d = self.up_nearest(crop_d)[0]
+        gt_label_cropped = b.crop(label[:, :, None].type(
+            torch.float32), scale=True, mode="nearest").type(torch.int32)
 
-        
-        tmp = torch.transpose(torch.transpose(
-            b.crop(label.unsqueeze(2)), 0, 2), 1, 2)
-        gt_label_cropped = torch.round(self.up_nearest(tmp.type(
-            torch.float32).unsqueeze(0))).clamp(0, 21)[0][0]
-        
+ 
         def l_to_cropped(l):
             tmp = b.crop(torch.from_numpy(  l[:,:,None] ))
             tmp = self.up_nearest(tmp[:,:,0] [None,None,:,:] )
@@ -515,31 +523,34 @@ class YCB(Backend):
         st = time.time()
         flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag, b_real, b_ren )
         if type( flow ) is bool: 
-            # print('Flow failed')
             return False
-        u_cropped = l_to_cropped(  flow[0] )
-        v_cropped = l_to_cropped(  flow[1] )
-        valid_flow_mask_cropped =  l_to_cropped( np.float32(flow[2]) )
-        valid_flow_mask_cropped = valid_flow_mask_cropped > 0.5
-        if torch.sum(valid_flow_mask_cropped,(0,1)) < 50: 
-            print('Failed to crop flow mask to less valid flow visible')
-            return False
+        
+
+        u_cropped = b.crop( torch.from_numpy( flow[0][:,:,None] ).type(
+            torch.float32), scale=True, mode="nearest").numpy()
+        v_cropped = b.crop(  torch.from_numpy( flow[1][:,:,None]).type(
+            torch.float32), scale=True, mode="nearest").numpy()
+        valid_flow_mask_cropped = b.crop(  torch.from_numpy( flow[2][:,:,None]).type(
+            torch.float32), scale=True, mode="nearest").type(torch.bool).numpy()
+       
 
         # scale the u and v so this is not in the uncropped space !
-        v_cropped_scaled = np.zeros( v_cropped.shape )
-        u_cropped_scaled = np.zeros( u_cropped.shape )
+        v_cropped_scaled = np.zeros( v_cropped.shape, dtype=np.float32 )
+        u_cropped_scaled = np.zeros( u_cropped.shape, dtype=np.float32)
         h = self.h
         w = self.w
-        nr1 = np.full((h,w), float(w/real_w) )
-        nr2 = np.full((h,w), float(real_tl[1]) )
-        nr3 = np.full((h,w), float(ren_tl[1]) )
-        nr4 = np.full((h,w), float(w/ren_w) )
-        v_cropped_scaled = (self.grid_y -((np.multiply((( np.divide( self.grid_y , nr1)+nr2) +(v_cropped.numpy()).astype(np.long)) - nr3 , nr4)).astype(np.long))).astype(np.long)
-        nr1 = np.full((h,w), float( h/real_h))
-        nr2 = np.full((h,w), float( real_tl[0]))
-        nr3 = np.full((h,w), float(ren_tl[0]))
-        nr4 = np.full((h,w), float(h/ren_h))
-        u_cropped_scaled = np.round(self.grid_x -(np.round((((self.grid_x /nr1)+nr2) +np.round(u_cropped.numpy()[:,:]))-nr3)*(nr4)))
+        nr1 = np.full((h,w), float(w/real_w) , dtype=np.float32)
+        nr2 = np.full((h,w), float(real_tl[1])  , dtype=np.float32)
+        nr3 = np.full((h,w), float(ren_tl[1]) , dtype=np.float32 )
+        nr4 = np.full((h,w), float(w/ren_w) , dtype=np.float32 )
+        # v_cropped_scaled = (self.grid_y -((np.multiply((( np.divide( self.grid_y , nr1)+nr2) +(v_cropped[:,:,0]).astype(np.long)) - nr3 , nr4)).astype(np.long))).astype(np.long)
+        v_cropped_scaled = (self.grid_y.astype(np.float32) -((np.multiply((( np.divide( self.grid_y.astype(np.float32) , nr1)+nr2) +(v_cropped[:,:,0])) - nr3 , nr4))))
+        
+        nr1 = np.full((h,w), float( h/real_h) , dtype=np.float32)
+        nr2 = np.full((h,w), float( real_tl[0]) , dtype=np.float32)
+        nr3 = np.full((h,w), float(ren_tl[0]) , dtype=np.float32)
+        nr4 = np.full((h,w), float(h/ren_h) , dtype=np.float32)
+        u_cropped_scaled = self.grid_x.astype(np.float32) -(np.round((((self.grid_x.astype(np.float32) /nr1)+nr2) +np.round(u_cropped[:,:,0]))-nr3)*(nr4))
 
         if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             render_img = self._color_jitter_render(render_img)
@@ -550,8 +561,7 @@ class YCB(Backend):
         if self._cfg_d['output_cfg'].get('norm_real', False):
             real_img = self._norm_real(real_img)
         
-        pred_points = 0
-        return (real_img, render_img, real_d, render_d, gt_label_cropped.type(torch.long), init_rot_wxyz, init_trans, pred_points, h_render[0].type(torch.float32), torch.from_numpy(np.float32( h_real )), img_ren[0], torch.from_numpy( u_cropped_scaled ), torch.from_numpy( v_cropped_scaled), valid_flow_mask_cropped.type(torch.bool), flow[-4:])
+        return (real_img, render_img, real_d[:,:,0], render_d[:,:,0], gt_label_cropped.type(torch.long)[:,:,0], init_rot_wxyz.type(torch.float32), init_trans.type(torch.float32), pred_points.type(torch.float32), h_render[0].type(torch.float32), torch.from_numpy(np.float32( h_real )), img_ren[0], torch.from_numpy( u_cropped_scaled[:,:] ).type(torch.float32), torch.from_numpy( v_cropped_scaled[:,:]).type(torch.float32), torch.from_numpy(valid_flow_mask_cropped[:,:,0]), flow[-4:])
     
     def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
         st___ = time.time()
@@ -575,9 +585,9 @@ class YCB(Backend):
         # b_real.tl = torch.tensor([0,0])
         # b_real.br = torch.tensor([480,640])
         
-        # b_ren.tl = torch.tensor([0,0])
+        # b_ren.tl = torch.tensoo([0,0])
         # b_ren.br = torch.tensor([480,640])
-        sub = 1
+        sub = 2
         tl, br = b_real.limit_bb()
         h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
         w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
@@ -872,8 +882,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 5000
-        self.max_iterations = 20000
+        self.max_matches = 1500
+        self.max_iterations = 10000
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):
