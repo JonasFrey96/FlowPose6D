@@ -76,20 +76,8 @@ def filter_pcd_cor(pcd1, pcd2, max_mean_deviation=0.2):
     mean_free = torch.abs(dif-mean)
     
     return mean_free < max_mean_deviation
-    
-def flow_to_trafo(real_br, 
-                  real_tl, 
-                  ren_br, 
-                  ren_tl, 
-                  flow_mask, 
-                  u_map, 
-                  v_map, 
-                  K_real, 
-                  K_ren, 
-                  real_d, 
-                  render_d, 
-                  h_real, 
-                  h_render):
+
+def flow_to_trafo(*args, **kwargs):
     """
     input:
       real_br: torch.tensor torch.Size([2])
@@ -114,9 +102,23 @@ def flow_to_trafo(real_br,
       The output rotation T_res is defined in the Camera coordinate frame. 
       Therfore premultiply the T_Res with h_render to get the new h_real_new !!!
     """
-    anal_tensor( real_br, 'real_br', print_on_error = True)
-    anal_tensor( real_tl, 'real_tl', print_on_error = True)
-
+    for k in kwargs.keys():
+        pass
+        #print(f"Variable: {k}, Type {type(kwargs[k])}, Dtype{kwargs[k].dtype}, Shape{kwargs[k].shape}")
+    real_br = kwargs['real_br']
+    real_tl = kwargs['real_tl']
+    ren_br = kwargs['ren_br']
+    ren_tl = kwargs['ren_tl']
+    flow_mask = kwargs['flow_mask']
+    u_map = kwargs['u_map']
+    v_map = kwargs['v_map']
+    K_real = kwargs['K_real']
+    K_ren = kwargs['K_ren']
+    real_d = kwargs['real_d']
+    render_d = kwargs['render_d']
+    h_real = kwargs['h_real']
+    h_render = kwargs['h_render']
+    
     # Grid for upsampled real
     a = float(real_br[0]-real_tl[0])/480*1.0000001
     b = float(real_br[1]-real_tl[1])/640*1.0000001
@@ -138,16 +140,14 @@ def flow_to_trafo(real_br,
     render_d_ind_h = torch.clamp(torch.round((render_d_ind_h - u_map).type(torch.float32)) ,0,479).type( torch.long )[flow_mask]
     render_d_ind_w = torch.clamp(torch.round((render_d_ind_w - v_map).type(torch.float32)),0,639).type( torch.long )[flow_mask] 
     index = render_d_ind_h*640 + render_d_ind_w # hacky indexing along two dimensions
+    if index.shape[0] < 50:
+        return False,None,None,None, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
+
     ren_d_masked  = render_d.flatten()[index]
     
     # Project depth map to the pointcloud real
     cam_scale = 10000
 
-    anal_tensor( flow_mask, 'flow_mask')
-    anal_tensor( grid_real_w, 'grid_real_w')
-    anal_tensor( grid_real_h, 'grid_real_h')
-    anal_tensor( u_map, 'u_map')
-    
     real_pixels = torch.stack( [grid_real_w[flow_mask], grid_real_h[flow_mask], torch.ones(grid_real_h.shape, device = u_map.device,  dtype= u_map.dtype)[flow_mask]], dim=1 ).type(u_map.dtype)
     K_inv = torch.inverse(K_real.type(torch.float32)).type(u_map.dtype)
     P_real = K_inv @ real_pixels.T
@@ -171,12 +171,11 @@ def flow_to_trafo(real_br,
     
     min_points = 20
     if torch.sum(m_total) < min_points:
-        print('Violated filter pcd_given_depthmap min points constrain in flow_to_trafo')
-        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
+        print(f'Violation filter pcd_given_depthmap: P_in: {P_ren.shape[0]} P_out: {torch.sum(m_total)}')
+        return False, P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
 
     P_ren = P_ren[m_total] 
     P_real = P_real[m_total]
-    # anal_tensor(  P_ren, 'P_ren m_total masked')
 
     # Do not transfrom to center coordinate system
     P_real_in_center = P_real                      
@@ -186,40 +185,25 @@ def flow_to_trafo(real_br,
     m_ren = filter_pcd( P_ren_in_center )
     m_tot = m_real * m_ren
     if torch.sum(m_tot) < min_points:
-        print('Violated filter pcd min points constrain in flow_to_trafo')
-        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
+        print(f'Violation filter_pcd: P_in: { P_ren_in_center.shape[0]} P_out: {torch.sum(m_tot)}')
+        return False, P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
 
     P_real_in_center = P_real_in_center[m_tot[:,0]]
     P_ren_in_center = P_ren_in_center[m_tot[:,0]]
-    # anal_tensor(  P_real_in_center, 'P_real_in_center m_tot masked')
-
+  
     # Max mean deviation
     m_new = filter_pcd_cor(P_real_in_center, P_ren_in_center)
     
     if torch.sum(m_new) < min_points:
-        print('Violated filter pcd_cor min points constrain in flow_to_trafo')
-        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
+        print(f'Violation filter_pcd_cor: P_in: { P_ren_in_center.shape[0]} P_out: {torch.sum(m_new)}')
+        return False, P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
 
     P_real_in_center = P_real_in_center[m_new]
     P_ren_in_center = P_ren_in_center[m_new]
 
-    
-    # if ( anal_tensor(  P_real_in_center, 'P_real_in_center') or
-    #     anal_tensor(  P_ren_in_center, 'P_ren_in_center') or
-    #     anal_tensor(  u_map, 'U_map') ):
-
-    #     anal_tensor(  K_ren_inv , 'K_ren_inv ')
-    #     anal_tensor(  ren_pixels , 'ren_pixels ')
-    #     anal_tensor(  real_pixels , 'real_pixels ')
-    #     raise Exception('ERROR in flow to trafo')
-    #
-    # Get transformation
+    # random shuffel
     pts_trafo = min( P_real_in_center.shape[0], 1000 )
     idx = torch.randperm( P_real_in_center.shape[0] )[0:pts_trafo]
-    if idx.shape[0] < 10:
-        print('EEEEEEEEEEEEEEEEEEEERRRRRRRRRRRRRor')
-        return P_real, P_ren, P_real, torch.eye(4, dtype= u_map.dtype, device=u_map.device)
-
     P_real_in_center = P_real_in_center[idx]
     P_ren_in_center = P_ren_in_center[idx]
 
@@ -230,5 +214,5 @@ def flow_to_trafo(real_br,
     P_hr[:,:3] = P_real_in_center
     P_real_trafo = (torch.inverse( T_res[0].type(torch.float32) ).type(u_map.dtype ) @ copy.deepcopy(P_hr).T).T [:,:3]
 
-    return P_real_in_center, P_ren_in_center, P_real_trafo, T_res[0]
+    return True, P_real_in_center, P_ren_in_center, P_real_trafo, T_res[0]
     

@@ -43,7 +43,6 @@ coloredlogs.install()
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.loss_focal import FocalLoss
-from lib.network import PoseNet, PoseRefineNet
 
 
 from loaders_v2 import GenericDataset
@@ -127,8 +126,6 @@ class TrackNet6D(LightningModule):
         num_points_small = exp['d_train']['num_pt_mesh_small']
         num_points_large = exp['d_train']['num_pt_mesh_large']
 
-        
-
         # self.pixelwise_refiner = PixelwiseRefiner(
         #     input_channels=6, num_classes=22, growth_rate=16)
         self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
@@ -186,6 +183,7 @@ class TrackNet6D(LightningModule):
         self.adds_mets = ['init','res_gt_flow','res_pred_flow','res_pred2_flow_and_mask']
 
     def forward(self, batch):
+        suc = True
         st = time.time()
         if self.visualizer is None:
             self.visualizer = Visualizer(self.exp['model_path'] +
@@ -210,7 +208,7 @@ class TrackNet6D(LightningModule):
         if batch[13] is False:
             loss = torch.zeros(
                 bs.shape, requires_grad=True, dtype=torch.float32, device=self.device)
-            return loss, log_scalars
+            return loss, log_scalars, False
 
         real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
         pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
@@ -218,10 +216,16 @@ class TrackNet6D(LightningModule):
         data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
         data = data.permute(0,3,1,2) # BS,C,H,W
 
+        if self.exp['efficient_disp_cfg'].get('depth_backbone'):
+            data_with_depth = data = torch.cat([data, real_d[:,None,:,:], render_d[:,None,:,:]], dim=1) 
+            flow, p_label = self.pixelwise_refiner(
+                data_with_depth, idx)
+        else:
+            flow, p_label = self.pixelwise_refiner(
+                data, idx)
         # TODO idx is currently unused !!!!
         
-        flow, p_label = self.pixelwise_refiner(
-            data, idx)
+
 
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
@@ -250,21 +254,20 @@ class TrackNet6D(LightningModule):
             fmt = flow_mask.dtype
             flow_mask_ero  = (flow_mask * ero_out.type(torch.float32)).type(fmt)[:,0]
 
-            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
-                copy.deepcopy(real_tl[b]), 
-                copy.deepcopy(ren_br[b]), 
-                copy.deepcopy(ren_tl[b]), 
-                copy.deepcopy(flow_mask_ero[b]), 
-                copy.deepcopy(u_map[b].type( typ )), 
-                copy.deepcopy(v_map[b].type( typ )), 
-                copy.deepcopy(K_real.type( typ )), 
-                copy.deepcopy(self.K_ren.type( typ )), 
-                copy.deepcopy(real_d[b].type( typ )), 
-                copy.deepcopy(render_d[b].type( typ )), 
-                copy.deepcopy(h_real_est.type( typ )), 
-                copy.deepcopy(h_render[b].type( typ )))
-
-            
+            suc, P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(
+                real_br = real_br[b], 
+                real_tl =  real_tl[b], 
+                ren_br = ren_br[b], 
+                ren_tl = ren_tl[b], 
+                flow_mask = flow_mask_ero[b], 
+                u_map = u_map[b].type( typ ), 
+                v_map = v_map[b].type( typ ), 
+                K_real = K_real.type( typ ), 
+                K_ren = self.K_ren.type( typ ), 
+                real_d = real_d[b].type( typ ), 
+                render_d = render_d[b].type( typ ), 
+                h_real = h_real_est.type( typ ), 
+                h_render = h_render[b].type( typ ))
 
             if anal_tensor( T_res, 'T_res GT Flow', print_on_error = True):
                 raise Exception('T_res GT Flow contains inf or nan')
@@ -272,22 +275,22 @@ class TrackNet6D(LightningModule):
             
             h_real_new_est =  T_res @ h_render[0].type(typ) # set rotation
             typ = flow[b, 0, :, :].dtype
-             
-            P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(real_br[b], 
-                real_tl[b],
-                ren_br[b], 
-                ren_tl[b], 
-                flow_mask[b], 
-                flow[b, 0, :, :].type( typ ), 
-                flow[b, 1, :, :].type( typ ), 
-                K_real.type( typ ), 
-                self.K_ren.type( typ ), 
-                real_d[b].type( typ ), 
-                render_d[b].type( typ ), 
-                h_real_est.type( typ ), 
-                h_render[b].type( typ ))
-
-
+            
+            suc_, P_real_in_center, P_ren_in_center, P_real_trafo, T_res= flow_to_trafo(
+                real_br = real_br[b], 
+                real_tl =  real_tl[b], 
+                ren_br = ren_br[b], 
+                ren_tl = ren_tl[b], 
+                flow_mask = flow_mask_ero[b],
+                u_map = flow[b, 0, :, :].type( typ ), 
+                v_map = flow[b, 1, :, :].type( typ ), 
+                K_real = K_real.type( typ ), 
+                K_ren = self.K_ren.type( typ ), 
+                real_d = real_d[b].type( typ ), 
+                render_d = render_d[b].type( typ ), 
+                h_real = h_real_est.type( typ ), 
+                h_render = h_render[b].type( typ ))
+            suc = suc and suc_
             h_real_new_est_pred_flow =  T_res @ h_render[0] # set rotation
 
             # Calculate erroded perdicted labels
@@ -295,19 +298,22 @@ class TrackNet6D(LightningModule):
             ero_in = (seg_max ==  unique_desig[1][:,None,None].repeat(1,480,640)   )[:,None,:,:].type(u_map.dtype) # BS,C,H,w
             t_size = get_scale_for_erosion(ero_in).type( u_map.dtype )
             valid_flow = eroision_batch(ero_in,t_size).type( torch.bool )[:,0]
-            _,_,_ , T_res = flow_to_trafo(real_br[b], 
-                real_tl[b],
-                ren_br[b], 
-                ren_tl[b], 
-                valid_flow[b], 
-                flow[b, 0, :, :].type( typ ), 
-                flow[b, 1, :, :].type( typ ), 
-                K_real.type( typ ), 
-                self.K_ren.type( typ ), 
-                real_d[b].type( typ ), 
-                render_d[b].type( typ ), 
-                h_real_est.type( typ ), 
-                h_render[b].type( typ ))
+            
+            suc_, _,_,_ , T_res= flow_to_trafo(
+                real_br = real_br[b], 
+                real_tl =  real_tl[b], 
+                ren_br = ren_br[b], 
+                ren_tl = ren_tl[b], 
+                flow_mask = valid_flow[b], 
+                u_map = flow[b, 0, :, :].type( typ ), 
+                v_map = flow[b, 1, :, :].type( typ ), 
+                K_real = K_real.type( typ ), 
+                real_d = real_d[b].type( typ ), 
+                K_ren = self.K_ren.type( typ ), 
+                render_d = render_d[b].type( typ ), 
+                h_real = h_real_est.type( typ ), 
+                h_render = h_render[b].type( typ ))
+            suc = suc and suc_
             h_real_pred_flow_and_mask =  T_res @ h_render[0] # set rotation
         
         if self.visu_forward:
@@ -457,7 +463,8 @@ class TrackNet6D(LightningModule):
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())
         log_scalars[f'loss_flow'] = float(torch.mean(flow_loss, dim=0).detach())
-        return loss, log_scalars
+        
+        return loss, log_scalars, suc
     def on_epoch_start(self):
         self.counter_images_logged = 0
         self._mode = 'train'
@@ -474,7 +481,7 @@ class TrackNet6D(LightningModule):
             self.visu_forward = False
 
         # forward
-        dis, log_scalars = self(batch[0])
+        dis, log_scalars, suc = self(batch[0])
 
         loss = torch.mean(dis)
         
@@ -507,46 +514,58 @@ class TrackNet6D(LightningModule):
             self.visu_forward = False
 
         # forward
-        dis, log_scalars = self(batch[0])
+        dis, log_scalars, suc = self(batch[0])
+        
         bs = dis.shape[0]
         
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         loss = torch.mean(dis)
-        
+        if not suc:
+            return {f'{self._mode}_loss': loss}
+
         try:
-            self._dict_track['val_disparity  [+inf - 0]'].append(float(loss))
+            self._dict_track[f'{self._mode}_disparity  [+inf - 0]'].append(float(loss))
         except:
-            self._dict_track['val_disparity  [+inf - 0]'] = [float(loss)]
+            self._dict_track[f'{self._mode}_disparity  [+inf - 0]'] = [float(loss)]
         
         for i in range(0, bs):
             # object loss for each object
             obj = int(unique_desig[1][i])
             obj = self.obj_list[obj - 1]
-            if f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]' in self._dict_track.keys():
-                self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'].append(
+            if f'{self._mode}_{obj}_avg_disparity_L2_dis  [+inf - 0]' in self._dict_track.keys():
+                self._dict_track[f'{self._mode}_{obj}_avg_disparity_L2_dis  [+inf - 0]'].append(
                     float(dis[i]))
             else:
-                self._dict_track[f'val_{obj}_avg_disparity_L2_dis  [+inf - 0]'] = [
+                self._dict_track[f'{self._mode}_{obj}_avg_disparity_L2_dis  [+inf - 0]'] = [
                     float(dis[i])]
-        
-        
+
+
         for n in self.adds_mets:
             try:
-                na = f'val_adds_dis_{n} (only for first obj in batch) [+inf - 0]' 
+                obj = int(unique_desig[1][0])
+                obj = self.obj_list[obj - 1]
+
+                na = f'{self._mode}_{n}adds_dis (only for first obj in batch) [+inf - 0]' 
+                na_obj =  f'{self._mode}_{obj}_{n}adds_dis (only for first obj in batch) [+inf - 0]' 
+
                 value = log_scalars[f'adds_{n}'] 
+
                 if na in self._dict_track.keys():
                     self._dict_track[na].append( value )
                 else:
                     self._dict_track[na] = [value]
+
+                if na_obj in self._dict_track.keys():
+                    self._dict_track[na_obj].append( value )
+                else:
+                    self._dict_track[na_obj] = [value]
             except:
                 pass            
 
-        tensorboard_logs = {'val_disparity': float(loss)}
+        tensorboard_logs = {f'{self._mode}_disparity': float(loss)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
 
-        val_loss = loss
-        val_dis = loss
-        return {'val_loss': val_loss, 'val_dis': val_dis, 'log': tensorboard_logs}
+        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs}
    
     def on_test_epoch_start(self):
         self.counter_images_logged = 0
@@ -565,11 +584,16 @@ class TrackNet6D(LightningModule):
             self.visu_forward = False
 
         # forward
-        dis, log_scalars = self(batch[0])
+        dis, log_scalars, suc = self(batch[0])
         bs = dis.shape[0]
         
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         loss = torch.mean(dis)
+
+        if not suc:
+            return {f'{self._mode}_loss': loss}
+
+
         try:
             self._dict_track[f'{self._mode}_disparity  [+inf - 0]'].append(float(loss))
         except:
@@ -650,9 +674,13 @@ class TrackNet6D(LightningModule):
                 np.uint8), global_step=self.current_epoch, dataformats='HWC')
         except:
             pass
-        avg_val_dis_float = float(avg_dict['avg_val_disparity  [+inf - 0]'])
-        return {'avg_val_dis_float': avg_val_dis_float,
-                'avg_val_dis': torch.tensor( avg_dict['avg_val_disparity  [+inf - 0]'] ),
+        if not 'avg_val_disparity  [+inf - 0]' in avg_dict.keys():
+            avg_dict['avg_val_disparity  [+inf - 0]'] = 999
+        avg_val_disparity_float = float(avg_dict['avg_val_disparity  [+inf - 0]'])
+
+
+        return {'avg_val_disparity_float': avg_val_disparity_float,
+                'avg_val_disparity': torch.tensor( avg_dict['avg_val_disparity  [+inf - 0]'] ),
                 'log': avg_dict}
 
     def training_epoch_end(self, outputs):
@@ -935,7 +963,7 @@ if __name__ == "__main__":
     model = TrackNet6D(**dic)
 
     early_stop_callback = EarlyStopping(
-        monitor='avg_val_dis_float',
+        monitor='avg_val_disparity_float',
         patience=exp.get('early_stopping_cfg', {}).get('patience', 100),
         strict=True,
         verbose=True,
@@ -943,9 +971,9 @@ if __name__ == "__main__":
     )
 
     checkpoint_callback = ModelCheckpoint(
-        filepath=exp['model_path'] + '/{epoch}-{avg_val_dis_float:.4f}',
+        filepath=exp['model_path'] + '/{epoch}-{avg_val_disparity_float:.4f}',
         verbose=True,
-        monitor="avg_val_dis",
+        monitor="avg_val_disparity",
         mode="min",
         prefix="",
         save_last=True,

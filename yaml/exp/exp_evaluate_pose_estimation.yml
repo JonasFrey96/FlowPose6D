@@ -110,16 +110,23 @@ d_test:
     seq_length: 1
     fixed_length: true
     sub_sample: 1
-    mode: "test" #dense_fusion_test
+    mode: "dense_fusion_test" #dense_fusion_test
     add_syn_to_train: false
+  flow_cfg:
+    sub: 1
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   noise_cfg:
     status: false
     noise_trans: 0.0
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.04
-    noise_rotation: 20
+    noise_translation: 0.02
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -165,16 +172,23 @@ d_train:
     no_list_for_sequence_len_one: True
     fixed_length: true
     sub_sample: 1
-    mode: "train"
+    mode: "dense_fusion_train"
     add_syn_to_train: true
   noise_cfg:
     status: false
     noise_trans: 0
+  flow_cfg:
+    sub: 1
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   output_cfg:
-    overfitting_nr_idx: 100
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 20
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
