@@ -12,13 +12,18 @@ def deconv(in_planes, out_planes):
     )
 
 class EfficientDisparity(nn.Module):
-  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2):
+  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2, depth_backbone = False):
     # tested with b6
     super().__init__()
     self.connections_encoder_decoder = connections_encoder_decoder
     self.feature_extractor = EfficientNet.from_pretrained(backbone)
     self.size = self.feature_extractor.get_image_size( backbone ) 
     idxs, feats, res = self.feature_extractor.layer_info( torch.ones( (4,3,self.size, self.size)))
+    
+    self.depth_backbone = depth_backbone
+    if self.depth_backbone: 
+      self.feature_extractor_depth = EfficientNet.from_name(backbone, in_channels=1) 
+
     r = res[0]
     self.idx_extract = []
     self.feature_sizes = []
@@ -35,7 +40,11 @@ class EfficientDisparity(nn.Module):
     dc = []
     for i in range( len(self.feature_sizes)-1 ):
       if i == 0:
-        dc.append( deconv(self.feature_sizes[- (i+1) ] *2, self.feature_sizes[-(i+2)] ) )
+        if self.depth_backbone: 
+          mult = 4
+        else:
+          mult = 2
+        dc.append( deconv(self.feature_sizes[- (i+1) ] * mult, self.feature_sizes[-(i+2)] ) )
       else:
         dc.append( deconv(self.feature_sizes[- (i+1) ] , self.feature_sizes[-(i+2)] ) )
     self.deconvs = nn.ModuleList(dc)
@@ -49,11 +58,13 @@ class EfficientDisparity(nn.Module):
     ])
     self.up_out = torch.nn.UpsamplingBilinear2d(size=(480, 640))
 
-  def forward(self, data, idx, label=None):
+    self.up_nn_in= torch.nn.UpsamplingNearest2d(size=(self.size, self.size))
+
+  def forward(self, data, idx=False, label=None):
     """Forward pass
 
     Args:
-        data ([torch.tensor]): BS,C,H,W (C=6)
+        data ([torch.tensor]): BS,C,H,W (C=6) if self.depth_backbone: C = 8 else: C = 6 
         idx ([torch.tensor]): BS,1
         label ([type], optional): [description]. Defaults to None.
 
@@ -67,16 +78,28 @@ class EfficientDisparity(nn.Module):
     BS,C,H,W = data.shape
 
     real = self.up_in(data[:,:3] )
-    render =  self.up_in(data[:,3:] )
+    render =  self.up_in(data[:,3:6] )
+
+    if self.depth_backbone: 
+      real_d =  self.up_nn_in(data[:,6][:,None,:,:] ) 
+      render_d =  self.up_nn_in(data[:,7][:,None,:,:] )
+      feat_real_d = self.feature_extractor_depth.extract_features_layerwise( real_d , idx_extract = self.idx_extract[-1:])
+      feat_render_d = self.feature_extractor_depth.extract_features_layerwise( render_d , idx_extract = self.idx_extract[-1:])
+
     for i in range(BS):
       real[i] = self.input_trafos( real[i] ) 
       render[i] = self.input_trafos( render[i] ) 
+
 
     feat_real  = self.feature_extractor.extract_features_layerwise( real , idx_extract = self.idx_extract)
     feat_render = self.feature_extractor.extract_features_layerwise( render, idx_extract = self.idx_extract)
     
     # Residual network structure with skip connections
-    inp_up1 = torch.cat([feat_real[-1],feat_render[-1] ], dim=1)
+    if self.depth_backbone: 
+      inp_up1 = torch.cat([feat_real[-1],feat_render[-1], feat_real_d[-1], feat_render_d[-1]], dim=1)
+    else:
+      inp_up1 = torch.cat([feat_real[-1],feat_render[-1] ], dim=1)
+    
     out_deconv = self.deconvs[0](inp_up1)
 
     # dim is used to make sure when upsampling to have the correct shape 17-> 34 but 33 is needed. Simply delete last row/col
@@ -105,12 +128,11 @@ class EfficientDisparity(nn.Module):
 
 if  __name__ == "__main__":
   from torchsummary import summary
-  model = EfficientDisparity()
+  model = EfficientDisparity(num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2, depth_backbone = True)
   BS = 2
   H = 480
   W = 640
-  C = 6
-
+  C = 8
 
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   data = torch.ones( (BS,C,H,W), device=device )

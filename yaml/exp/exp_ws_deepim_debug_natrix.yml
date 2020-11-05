@@ -1,6 +1,6 @@
 model_path: "/media/scratch1/jonfrey/models/runs/efficient_disparity/debug/_" #overfit_1_batch_bs_1
 
-checkpoint_restore: true
+checkpoint_restore: false
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_obj2/epoch=7-avg_val_dis_float=12.9083.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
 model_mode: fit #test
@@ -29,6 +29,7 @@ efficient_disp_cfg:
   num_classes: 22 
   backbone: 'efficientnet-b1'
   connections_encoder_decoder: 3 # number of residual connections
+  depth_backbone: True
 
 loss:
   weight_semantic_segmentation: 10
@@ -41,8 +42,8 @@ lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
-    factor: 0.95
-    threshold: 0.02
+    factor: 0.2
+    threshold: 0.1
   interval: "epoch"
   frequency: 1
 
@@ -55,7 +56,7 @@ eval:
 
 trainer:
   num_nodes: 1
-  precision: 16
+  precision: 32
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
@@ -81,15 +82,15 @@ visu:
   number_images_log_val: 2
   network_input_batch: False
   log_to_file: False
-  always_calculate: False
+  always_calculate: True
   full_val: True
 
 early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 4
-  num_workers: 2
+  batch_size: 2
+  num_workers: 4
   shuffle: True
   pin_memory: True
 
@@ -117,6 +118,13 @@ d_test:
   noise_cfg:
     status: false
     noise_trans: 0.0
+  flow_cfg:
+    sub: 2
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 2000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
@@ -147,7 +155,13 @@ d_test:
     visu:
       status: true
       return_img: true
-
+  flow_cfg:
+    sub: 3
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 3000
 d_train:
   name: "ycb"
   objects: 21
@@ -173,6 +187,7 @@ d_train:
   noise_cfg:
     status: false
     noise_trans: 0
+  
   output_cfg:
     overfitting_nr_idx: 100
     vm_in_dataloader: true

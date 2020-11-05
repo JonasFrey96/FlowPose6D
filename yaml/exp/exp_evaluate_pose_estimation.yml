@@ -112,6 +112,13 @@ d_test:
     sub_sample: 1
     mode: "dense_fusion_test" #dense_fusion_test
     add_syn_to_train: false
+  flow_cfg:
+    sub: 1
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   noise_cfg:
     status: false
     noise_trans: 0.0
@@ -170,6 +177,13 @@ d_train:
   noise_cfg:
     status: false
     noise_trans: 0
+  flow_cfg:
+    sub: 1
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true

@@ -9,209 +9,273 @@ import torch.optim as optim
 import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
+from torchvision.models.segmentation.deeplabv3 import DeepLabHead
 from torch.autograd import Variable
 from PIL import Image
 import numpy as np
-import pdb
 import torch.nn.functional as F
-from lib.pspnet import PSPNet
-from helper import batched_index_select
-psp_models = {
-    'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
-    'resnet34': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet34'),
-    'resnet50': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet50'),
-    'resnet101': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet101'),
-    'resnet152': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet152')
-}
 
-
-class ModifiedResnet(nn.Module):
-
-    def __init__(self, usegpu=True):
-        super(ModifiedResnet, self).__init__()
-
-        self.model = psp_models['resnet18'.lower()]()
-        self.model = nn.DataParallel(self.model)
+class AtrousConvs(nn.Module):
+    def __init__(self, in_features, features, dilations):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_features, features, kernel_size=3, stride=1, padding=1+dilations[0]-1,
+                dilation=dilations[0], bias=False)
+        self.conv2 = nn.Conv2d(in_features, features, kernel_size=3, stride=1, padding=1+dilations[1]-1,
+                dilation=dilations[1], bias=False)
+        self.conv3 = nn.Conv2d(in_features, features, kernel_size=3, stride=1, padding=1+dilations[2]-1,
+                dilation=dilations[2], bias=False)
+        self.conv4 = nn.Conv2d(in_features, features, kernel_size=3, stride=1, padding=1+dilations[3]-1,
+                dilation=dilations[3], bias=False)
+        self.bn = nn.BatchNorm2d(4 * features)
+        self.act = nn.ReLU(True)
 
     def forward(self, x):
-        x = self.model(x)
-        return x
+        x1 = self.conv1(x)
+        x2 = self.conv2(x)
+        x3 = self.conv3(x)
+        x4 = self.conv4(x)
+        x = torch.cat([x1, x2, x3, x4], dim=1)
+        return self.act(self.bn(x))
+
+def pointwise_conv(in_features, out_features):
+    return nn.Sequential(AtrousConvs(in_features, 64, dilations=[1, 3, 5, 7]),
+            Conv(256, 128, kernel_size=1, padding=0),
+            nn.Conv2d(128, out_features, kernel_size=1, padding=0, bias=True))
+
+class SegmentationHead(nn.Module):
+    def __init__(self, in_features, num_classes):
+        super().__init__()
+        self.atrous = AtrousConvs(in_features, 64, [1, 3, 5, 7])
+        self.conv = Conv(256, 128, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv2d(128, num_classes, kernel_size=1, padding=0, bias=True)
+
+    def forward(self, x):
+        x = self.atrous(x)
+        x = self.conv(x)
+        return self.conv_out(x)
+
+class KeypointHead(nn.Module):
+    def __init__(self, n_classes, in_features, out_features, objectwise_weights):
+        super().__init__()
+        self.objectwise_weights = objectwise_weights
+        self.out_features = out_features
+        self.n_out = n_classes
+        self.convs = AtrousConvs(in_features, 64, [1, 3, 5, 7])
+        self.conv1 = nn.Conv2d(256, 128, 1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(128)
+        if self.objectwise_weights:
+            self.out = nn.Conv2d(128, self.n_out * out_features,
+                             1, stride=1, padding=0, bias=True)
+        else:
+            self.out = nn.Conv2d(128, out_features, kernel_size=1,
+                    stride=1, padding=0, bias=True)
+
+    def forward(self, x, label):
+        # x: N x C x H x W
+        # label: N x 1 x H x W
+        x = self.convs(x)
+        x = self.bn1(self.conv1(x))
+        x = F.relu(x, inplace=True)
+        N, C, H, W = x.shape
+        if self.objectwise_weights:
+            x = self.out(x).reshape(N, self.out_features, self.n_out, H, W)
+            out = torch.gather(x, 2, label[:, None, None, :, :].expand(-1, self.out_features, -1, -1, -1))[:, :, 0]
+        else:
+            out = self.out(x)
+        return out
+
+class Conv(nn.Module):
+    def __init__(self, in_features, out_features, kernel_size=3, padding=1, **kwargs):
+        super().__init__()
+        self.conv = nn.Conv2d(in_features, out_features,
+                              kernel_size, padding=padding, bias=False, **kwargs)
+        self.bn = nn.BatchNorm2d(out_features)
+        self.act = nn.ReLU(True)
+
+    def forward(self, x):
+        x = self.bn(self.conv(x))
+        return self.act(x)
 
 
-class PoseNetFeat(nn.Module):
-    def __init__(self, num_points):
-        super(PoseNetFeat, self).__init__()
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
-        self.conv2 = torch.nn.Conv1d(64, 128, 1)
+class DenseBlock(nn.Module):
+    def __init__(self, in_features, layers=4, growth_rate=8):
+        super().__init__()
+        start = in_features // 2
+        self.group_conv = Conv(in_features, start, kernel_size=1, padding=0)
+        self.convolutions = []
+        for i in range(0, layers):
+            conv = Conv(start + i * growth_rate, growth_rate)
+            self.add_module(f'conv_{i}', conv)
+            self.convolutions.append(conv)
 
-        self.e_conv1 = torch.nn.Conv1d(32, 64, 1)
-        self.e_conv2 = torch.nn.Conv1d(64, 128, 1)
+        self.d_out = start + layers * growth_rate
 
-        self.conv5 = torch.nn.Conv1d(256, 512, 1)
-        self.conv6 = torch.nn.Conv1d(512, 1024, 1)
-
-        self.ap1 = torch.nn.AvgPool1d(num_points)
-        self.num_points = num_points
-
-    def forward(self, x, emb):
-        x = F.relu(self.conv1(x))
-        emb = F.relu(self.e_conv1(emb))
-        pointfeat_1 = torch.cat((x, emb), dim=1)
-
-        x = F.relu(self.conv2(x))
-        emb = F.relu(self.e_conv2(emb))
-        pointfeat_2 = torch.cat((x, emb), dim=1)
-
-        x = F.relu(self.conv5(pointfeat_2))
-        x = F.relu(self.conv6(x))
-
-        ap_x = self.ap1(x)
-
-        ap_x = ap_x.view(-1, 1024, 1).repeat(1, 1, self.num_points)
-        # 128 + 256 + 1024
-        return torch.cat([pointfeat_1, pointfeat_2, ap_x], 1)
+    def forward(self, x, inputs):
+        outputs = [self.group_conv(x)]
+        for conv in self.convolutions:
+            out = conv(torch.cat(outputs, dim=1))
+            outputs.append(out)
+        out = torch.cat(outputs, dim=1)
+        inputs.append(out)
+        return out
 
 
-class PoseNet(nn.Module):
-    def __init__(self, num_points, num_obj):
-        super(PoseNet, self).__init__()
-        self.num_points = num_points
-        self.cnn = ModifiedResnet()
-        self.feat = PoseNetFeat(num_points)
+class Downsample(nn.Sequential):
+    def __init__(self, in_features):
+        super().__init__()
+        self.d_out = in_features
+        self.add_module('conv', nn.Conv2d(in_features, self.d_out,
+                                          kernel_size=3, stride=2, padding=1, bias=False))
+        self.add_module('bn', nn.BatchNorm2d(self.d_out))
+        self.add_module('act', nn.ReLU(True))
 
-        self.conv1_r = torch.nn.Conv1d(1408, 640, 1)
-        self.conv1_t = torch.nn.Conv1d(1408, 640, 1)
-        self.conv1_c = torch.nn.Conv1d(1408, 640, 1)
-
-        self.conv2_r = torch.nn.Conv1d(640, 256, 1)
-        self.conv2_t = torch.nn.Conv1d(640, 256, 1)
-        self.conv2_c = torch.nn.Conv1d(640, 256, 1)
-
-        self.conv3_r = torch.nn.Conv1d(256, 128, 1)
-        self.conv3_t = torch.nn.Conv1d(256, 128, 1)
-        self.conv3_c = torch.nn.Conv1d(256, 128, 1)
-
-        self.conv4_r = torch.nn.Conv1d(128, num_obj * 4, 1)  # quaternion
-        self.conv4_t = torch.nn.Conv1d(128, num_obj * 3, 1)  # translation
-        self.conv4_c = torch.nn.Conv1d(128, num_obj * 1, 1)  # confidence
-
-        self.num_obj = num_obj
-
-    def forward(self, img, x, choose, obj):
-        out_img = self.cnn(img)
-
-        bs, di, _, _ = out_img.size()
-
-        emb = out_img.view(bs, di, -1)
-        choose = choose.repeat(1, di, 1)
-        emb = torch.gather(emb, 2, choose).contiguous()
-
-        x = x.transpose(2, 1).contiguous()
-        ap_x = self.feat(x, emb)
-
-        rx = F.relu(self.conv1_r(ap_x))
-        tx = F.relu(self.conv1_t(ap_x))
-        cx = F.relu(self.conv1_c(ap_x))
-
-        rx = F.relu(self.conv2_r(rx))
-        tx = F.relu(self.conv2_t(tx))
-        cx = F.relu(self.conv2_c(cx))
-
-        rx = F.relu(self.conv3_r(rx))
-        tx = F.relu(self.conv3_t(tx))
-        cx = F.relu(self.conv3_c(cx))
-
-        rx = self.conv4_r(rx).view(bs, self.num_obj, 4, self.num_points)
-        tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
-        cx = torch.sigmoid(self.conv4_c(cx)).view(
-            bs, self.num_obj, 1, self.num_points)
-
-        b = 0
-        out_rx = batched_index_select(t=rx, inds=obj, dim=1).squeeze(1)
-        out_cx = batched_index_select(t=cx, inds=obj, dim=1).squeeze(1)
-        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1)
-
-        # out_rx = torch.index_select(rx[b], 0, obj[b])
-        # out_tx = torch.index_select(tx[b], 0, obj[b])
-        # out_cx = torch.index_select(cx[b], 0, obj[b])
-        # res1 = torch.norm(out_rx_test - out_rx)
-
-        out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
-        out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
-        out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
-        # res2 = torch.norm(out_rx_test - out_rx)
-
-        return out_rx, out_tx, out_cx, emb.detach(), ap_x
+    def forward(self, x, inputs):
+        return super().forward(x)
 
 
-class PoseRefineNetFeat(nn.Module):
-    def __init__(self, num_points):
-        super(PoseRefineNetFeat, self).__init__()
-        self.conv1 = torch.nn.Conv1d(3, 64, 1)
-        self.conv2 = torch.nn.Conv1d(64, 128, 1)
+class Upsample(nn.Module):
+    def __init__(self, in_features, size):
+        super().__init__()
+        self.size = size
+        self.d_out = in_features
 
-        self.e_conv1 = torch.nn.Conv1d(32, 64, 1)
-        self.e_conv2 = torch.nn.Conv1d(64, 128, 1)
+    def forward(self, x, *args):
+        return F.interpolate(x, self.size, mode='bilinear', align_corners=True)
 
-        self.conv5 = torch.nn.Conv1d(384, 512, 1)
-        self.conv6 = torch.nn.Conv1d(512, 1024, 1)
+class ConcatBlock(nn.Module):
+    def __init__(self, in_features, index):
+        super().__init__()
+        self.index = index
 
-        self.ap1 = torch.nn.AvgPool1d(num_points)
-        self.num_points = num_points
+    def forward(self, x, inputs):
+        y = inputs[self.index]
+        return torch.cat([x, y], dim=1)
 
-    def forward(self, x, emb):
-        x = F.relu(self.conv1(x))
-        emb = F.relu(self.e_conv1(emb))
-        pointfeat_1 = torch.cat([x, emb], dim=1)
+class DropoutBlock(nn.Module):
+    def __init__(self, in_features, p):
+        super().__init__()
+        self.d_out = in_features
+        self.p = p
 
-        x = F.relu(self.conv2(x))
-        emb = F.relu(self.e_conv2(emb))
-        pointfeat_2 = torch.cat([x, emb], dim=1)
-
-        pointfeat_3 = torch.cat([pointfeat_1, pointfeat_2], dim=1)
-
-        x = F.relu(self.conv5(pointfeat_3))
-        x = F.relu(self.conv6(x))
-
-        ap_x = self.ap1(x)
-
-        ap_x = ap_x.view(-1, 1024)
-        return ap_x
+    def forward(self, x, *args):
+        return F.dropout(x, p=self.p)
 
 
-class PoseRefineNet(nn.Module):
-    def __init__(self, num_points, num_obj):
-        super(PoseRefineNet, self).__init__()
-        self.num_points = num_points
-        self.feat = PoseRefineNetFeat(num_points)
+BLOCK_TYPES = {
+    'DenseBlock': DenseBlock,
+    'Downsample': Downsample,
+    'Upsample': Upsample,
+    'ConcatBlock': ConcatBlock,
+    'Dropout': DropoutBlock
+}
 
-        self.conv1_r = torch.nn.Linear(1024, 512)
-        self.conv1_t = torch.nn.Linear(1024, 512)
+class Backbone(nn.Module):
+    def __init__(self, features_in, blocks):
+        super().__init__()
+        self.blocks = []
+        features = features_in
+        d_features = [features_in]
+        for block in blocks:
+            block_type = block['type']
+            block_class = BLOCK_TYPES[block_type]
+            kwargs = block.copy()
+            del kwargs['type']
+            instance = block_class(features, **kwargs)
+            self.blocks.append(instance)
 
-        self.conv2_r = torch.nn.Linear(512, 128)
-        self.conv2_t = torch.nn.Linear(512, 128)
+            if block_type == 'DenseBlock':
+                features = instance.d_out
+                d_features.append(features)
+            elif block_type == 'ConcatBlock':
+                features = features + d_features[block['index']]
+            else:
+                features = instance.d_out
 
-        self.conv3_r = torch.nn.Linear(128, num_obj * 4)  # quaternion
-        self.conv3_t = torch.nn.Linear(128, num_obj * 3)  # translation
+        self.blocks = nn.ModuleList(self.blocks)
+        self.d_out = features
+        self.d_inner = d_features[len(d_features) // 2]
 
-        self.num_obj = num_obj
+    def forward(self, x):
+        inputs = [x]
+        for block in self.blocks:
+            x = block(x, inputs)
+        return x, inputs[len(inputs) // 2]
 
-    def forward(self, x, emb, obj):
-        bs = x.size()[0]
+class KeypointNet(nn.Module):
+    def __init__(self, backbone, num_keypoints=8, num_classes=21, normals=False,
+            objectwise_weights=True):
+        super().__init__()
+        self.normals = normals
+        self.objectwise_weights = objectwise_weights
+        depth_features = 6 if normals else 3
+        initial_features = 32
+        self.features = nn.Sequential(
+            nn.Conv2d(3, initial_features, kernel_size=7,
+                      padding=3, stride=2, bias=True),
+            nn.ELU(True))
+        self.depth_features = nn.Sequential(
+                nn.Conv2d(depth_features, initial_features, kernel_size=7,
+                    padding=3, stride=2, bias=True),
+                nn.ELU(True))
 
-        x = x.transpose(2, 1).contiguous()
-        ap_x = self.feat(x, emb)
+        self.rgb_backbone = Backbone(initial_features, backbone)
+        self.depth_backbone = Backbone(initial_features, backbone)
+        out_features = self.rgb_backbone.d_out
 
-        rx = F.relu(self.conv1_r(ap_x))
-        tx = F.relu(self.conv1_t(ap_x))
+        self.fuse = Conv(self.rgb_backbone.d_out + self.depth_backbone.d_out,
+                out_features,
+                kernel_size=1, padding=0)
 
-        rx = F.relu(self.conv2_r(rx))
-        tx = F.relu(self.conv2_t(tx))
+        self.keypoints_out = num_keypoints * 3
+        self.num_classes = num_classes
+        self.keypoint_head = KeypointHead(
+            num_classes, out_features + 6, self.keypoints_out, objectwise_weights)
+        self.center_head = pointwise_conv(out_features + 3, 3)
+        self.segmentation_head = SegmentationHead(out_features, num_classes)
 
-        rx = self.conv3_r(rx).view(bs, self.num_obj, 4)
-        tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
+    def forward(self, img, points, normals, label=None):
+        N, C, H, W = img.shape
+        features = self.features(img)  # 240 x 320
+        if self.normals:
+            points = torch.cat([points, normals], dim=1)
 
-        out_rx = batched_index_select(t=rx, inds=obj, dim=1).squeeze(1)
-        out_tx = batched_index_select(t=tx, inds=obj, dim=1).squeeze(1)
+        depth_features = self.depth_features(points)
+<<<<<<< HEAD
+        x_rgb, rgb_inner = self.rgb_backbone(features)
+        x_depth, depth_inner = self.depth_backbone(depth_features)
+        x = torch.cat([x_rgb, x_depth], dim=1)
+        x = self.fuse(x)
 
-        return out_rx, out_tx
+        x_inner = torch.cat([rgb_inner, depth_inner], dim=1)
+
+        output_shape = x.shape[-2:]
+        segmentation = self.segmentation_head(x_inner)
+        segmentation = F.interpolate(segmentation, output_shape, mode='bilinear')
+        seg_mask = segmentation.argmax(dim=1)
+
+        points_small = F.interpolate(points, output_shape, mode='nearest')
+=======
+        x_rgb  = self.rgb_backbone(features)
+        x_depth = self.depth_backbone(depth_features)
+        x = torch.cat([x_rgb, x_depth], dim=1)
+        x = self.fuse(x)
+
+        segmentation = self.segmentation_head(x)
+
+        if self.objectwise_weights and label is None:
+            seg_mask = segmentation.argmax(dim=1)
+        elif label is None:
+            seg_mask = torch.tensor([])
+        else:
+            seg_mask = label
+
+        points_small = F.interpolate(points, x.shape[-2:], mode='bilinear', align_corners=True)
+>>>>>>> 375d83f38c5051866ed41fa680aba5bffd822a71
+        x_points = torch.cat([x, points_small], dim=1)
+        centers = self.center_head(x_points)
+
+        x_points_centers = torch.cat([x_points, centers.detach()], dim=1)
+        keypoints = self.keypoint_head(x_points_centers, seg_mask.detach())
+
+        return keypoints, centers, segmentation
+

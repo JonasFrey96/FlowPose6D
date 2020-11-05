@@ -566,7 +566,9 @@ class YCB(Backend):
     def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
         st___ = time.time()
         f_1 = label_img == int( idx)
-        if np.sum(f_1) < 200:
+        
+        min_vis_size = self._cfg_d.get('flow_cfg', {}).get('min_vis_size',200)
+        if np.sum(f_1) < min_vis_size:
             # to little of the object is visible 
             return False
         st = time.time()
@@ -587,7 +589,8 @@ class YCB(Backend):
         
         # b_ren.tl = torch.tensoo([0,0])
         # b_ren.br = torch.tensor([480,640])
-        sub = 2
+        sub = self._cfg_d.get('flow_cfg', {}).get('sub',2)
+
         tl, br = b_real.limit_bb()
         h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
         w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
@@ -665,7 +668,9 @@ class YCB(Backend):
         f_3 = f_2  * f_1
         points = np.where(f_3!=False)
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
-        if matches < 50 or np.sum(f_3) < 50: 
+        
+        min_matches = self._cfg_d.get('flow_cfg', {}).get('min_matches',50)
+        if matches < 50 or np.sum(f_3) < min_matches: 
             # print(f'not enough matches{matches}, F3 {np.sum(f_3)}, REAL {h_idx_real.shape}')
             # print(render_res, rays_dir_render2.shape, rays_origin_render2.shape )
             return False
@@ -673,8 +678,9 @@ class YCB(Backend):
         u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
         v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
 
+        dil_kernel_size = self._cfg_d.get('flow_cfg', {}).get('dil_kernel_size',2)
         inp = np.uint8( f_3*255 ) 
-        kernel = np.ones((1,1),np.uint8)
+        kernel = np.ones((dil_kernel_size,dil_kernel_size),np.uint8)
         valid_flow_mask = ( cv2.dilate(inp, kernel, iterations = 1) != 0 )
         valid_flow_mask = valid_flow_mask * f_1
 
@@ -882,8 +888,8 @@ class YCB(Backend):
         self.load_rays_dir() 
         self.load_meshes()
 
-        self.max_matches = 1500
-        self.max_iterations = 10000
+        self.max_matches = self._cfg_d.get('flow_cfg', {}).get('max_matches',1500)
+        self.max_iterations =  self._cfg_d.get('flow_cfg', {}).get('max_iterations',10000)
         self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
 
     def transform_mesh(self, mesh, H):

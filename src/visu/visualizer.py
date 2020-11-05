@@ -259,7 +259,7 @@ Vertical, pos down | neg up:
             self.writer.add_image(tag, img_f.astype(
                 np.uint8), global_step=epoch, dataformats='HWC')
     @multiplot
-    def plot_segmentation(self, tag, epoch, label, store, method='def'):
+    def plot_segmentation(self, tag, epoch, label, store, method='def', jupyter= False):
         if label.dtype == np.bool:
             col_map = SEG_COLORS_BIN
         else:
@@ -283,6 +283,11 @@ Vertical, pos down | neg up:
         if self.writer is not None:
             self.writer.add_image(
                 tag, image_out, global_step=epoch, dataformats="HWC")
+        if jupyter:
+            display(Image.fromarray( image_out.astype(np.uint8) ))
+            
+
+
     @multiplot
     def plot_estimated_pose(self,
                             tag,
