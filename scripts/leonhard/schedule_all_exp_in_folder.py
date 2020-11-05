@@ -29,7 +29,18 @@ else:
 p = f'/cluster/home/jonfrey/PLR3/yaml/exp/{args.exp}/'
 exps = [str(p) for p in Path(p).rglob('*.yml')]
 
+import yaml
+for j,e in enumerate(exps):
+  print(e)
+  with open(e) as f:
+      doc = yaml.load(f, Loader=yaml.FullLoader) 
+  doc['visu']['log_to_file'] = True
+  with open(e, 'w+') as f:
+      yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+  
+
 for j, e in enumerate(exps):
+  
   cmd = f"""cd /cluster/home/jonfrey/PLR3 && bsub -n 20 -W {s1} -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=16000]" ./scripts/leonhard/submit.sh --exp={e} --env=yaml/env/env_leonhard_jonas.yml"""
   os.system(cmd)
   print(f'Run: {j}, Exp: {e}, Time: {s1}h')
