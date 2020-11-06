@@ -57,7 +57,7 @@ class EfficientDisparity(nn.Module):
       transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    self.norm_depth = transforms.Normalize([0.485], [0.229])
+    self.norm_depth = transforms.Normalize([0.485,0.485], [0.229,0.229])
     self.up_out = torch.nn.UpsamplingNearest2d(size=(480, 640))
 
     self.up_nn_in= torch.nn.UpsamplingNearest2d(size=(self.size, self.size))
@@ -81,19 +81,19 @@ class EfficientDisparity(nn.Module):
 
     real = self.up_in(data[:,:3] )
     render =  self.up_in(data[:,3:6] )
-    for i in range(BS):
-      data[i,6] = self.norm_depth( data[i,6]) 
-      data[i,7] = self.norm_depth( data[i,7]) 
+    
+    
     for i in range(BS):
       real[i] = self.input_trafos( real[i] ) 
-      render[i] = self.input_trafos( render[i] ) 
+      render[i] = self.input_trafos( render[i] )
+      if self.depth_backbone:
+        data[i,6:] = self.norm_depth( data[i,6:])  
 
     if self.depth_backbone: 
       real_d =  self.up_nn_in(data[:,6][:,None,:,:] ) 
       render_d =  self.up_nn_in(data[:,7][:,None,:,:] )
       feat_real_d = self.feature_extractor_depth.extract_features_layerwise( real_d , idx_extract = self.idx_extract[-1:])
       feat_render_d = self.feature_extractor_depth.extract_features_layerwise( render_d , idx_extract = self.idx_extract[-1:])
-    print("PRINT FEAT REAL D",feat_real_d[-1], feat_render_d[-1])
     feat_real  = self.feature_extractor.extract_features_layerwise( real , idx_extract = self.idx_extract)
     feat_render = self.feature_extractor.extract_features_layerwise( render, idx_extract = self.idx_extract)
     
@@ -114,7 +114,6 @@ class EfficientDisparity(nn.Module):
       else:
         inp = out_deconv[:,:,:dim,:dim]
       # DECONV with skip conncetions d( feat_real[-2-j] + out_deconv[:,:,:dim,:dim] )
-      print(inp)
       out_deconv = d( inp )
       
     # no residual for last layer. Here maybe convert to gray scale and add residual. Not sure if this would be a good idea of if this has been proofen to work before

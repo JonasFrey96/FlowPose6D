@@ -229,25 +229,14 @@ class TrackNet6D(LightningModule):
         # if torch.isnan(p_label).any():
         #     p_label[:,:,:] = 0
 
-
         focal_loss = self.criterion_focal(
             p_label, gt_label_cropped)
 
         ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
         uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
-        anal_tensor( gt_label_cropped, 'GTLabelCropped', print_on_error = True)
-        anal_tensor( gt_label_cropped, 'GTLabelCropped', print_on_error = True) 
-        anal_tensor( p_label, 'P_label', print_on_error = True)
-        
-        if anal_tensor( focal_loss, 'Focal Loss', print_on_error = True) or \
-            anal_tensor( uv_gt, 'UV_GT', print_on_error = True) or \
-            anal_tensor( flow, 'Flow', print_on_error = True) or \
-            anal_tensor( gt_label_cropped, 'GTLabelCropped', print_on_error = True) or \
-            anal_tensor( p_label, 'P_label', print_on_error = True) :
-            raise Exception('Error before loss calc') 
+
         flow_loss = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
-        if torch.any( torch.sum( ind[:,0,:,:], (1,2)) < 30 ): 
-            print( 'Invalid Flow Mask' )
+
         if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
             real_tl, real_br, ren_tl, ren_br = bb 
 
