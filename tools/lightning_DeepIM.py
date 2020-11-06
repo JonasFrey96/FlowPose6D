@@ -225,6 +225,9 @@ class TrackNet6D(LightningModule):
                 data, idx)
         # TODO idx is currently unused !!!!
         
+        # print('P_Label', torch.max( p_label), torch.min( p_label))
+        # if torch.isnan(p_label).any():
+        #     p_label[:,:,:] = 0
 
 
         focal_loss = self.criterion_focal(
@@ -232,6 +235,16 @@ class TrackNet6D(LightningModule):
 
         ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
         uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
+        anal_tensor( gt_label_cropped, 'GTLabelCropped', print_on_error = True)
+        anal_tensor( gt_label_cropped, 'GTLabelCropped', print_on_error = True) 
+        anal_tensor( p_label, 'P_label', print_on_error = True)
+        
+        if anal_tensor( focal_loss, 'Focal Loss', print_on_error = True) or \
+            anal_tensor( uv_gt, 'UV_GT', print_on_error = True) or \
+            anal_tensor( flow, 'Flow', print_on_error = True) or \
+            anal_tensor( gt_label_cropped, 'GTLabelCropped', print_on_error = True) or \
+            anal_tensor( p_label, 'P_label', print_on_error = True) :
+            raise Exception('Error before loss calc') 
         flow_loss = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
         if torch.any( torch.sum( ind[:,0,:,:], (1,2)) < 30 ): 
             print( 'Invalid Flow Mask' )
@@ -421,9 +434,6 @@ class TrackNet6D(LightningModule):
                                         K = K_real.cpu().numpy(),
                                         H = h_real_new_est_pred_flow.detach().cpu().numpy(),
                                         method='right')
- 
- 
- 
             self.visualizer.plot_estimated_pose(    tag = f"_",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),

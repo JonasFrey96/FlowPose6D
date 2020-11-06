@@ -1,6 +1,9 @@
-model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/deep_im/debug"
+model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_depthmap/b1_res2_los_10to1_lr-3"
+
+checkpoint_restore: false
+checkpoint_load: "false"
 mail: false
-model_mode: fit
+model_mode: fit #test
 
 model:
   df_load: True
@@ -22,19 +25,25 @@ model:
     render_depth_mask: True
   sem_seg: True
 
+efficient_disp_cfg:
+  num_classes: 22 
+  backbone: 'efficientnet-b1'
+  connections_encoder_decoder: 2 # number of residual connections
+  depth_backbone: True
+
 loss:
-  weight_semantic_segmentation: 0.5
-  weight_flow: 0.5
+  weight_semantic_segmentation: 10
+  weight_flow: 1
   weight_pose: 0
-  weight_trans: 1
+  weight_trans: 0
 
 epochs: 500
-lr: 1.0e-3
+lr: 1.0e-6
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
-    factor: 0.95
-    threshold: 0.02
+    factor: 0.5
+    threshold: 0.05
   interval: "epoch"
   frequency: 1
 
@@ -51,10 +60,10 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 500
-  limit_val_batches: 5
-  limit_test_batches: 5
-  progress_bar_refresh_rate: 1
+  limit_train_batches: 1000
+  limit_val_batches: 100
+  limit_test_batches: 100
+  progress_bar_refresh_rate: 10
   max_epochs: 100
   terminate_on_nan: false
   profiler: false
@@ -68,24 +77,22 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 5
-  number_images_log_test: 5
-  number_images_log_val: 5
+  number_images_log_train: 2
+  number_images_log_test: 2
+  number_images_log_val: 2
   network_input_batch: False
   log_to_file: False
   always_calculate: False
   full_val: True
 
-
-
 early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 2
-  num_workers: 16
-  shuffle: True
-  pin_memory: False
+  batch_size: 16
+  num_workers: 18
+  shuffle: true
+  pin_memory: true
 
 d_test:
   name: "ycb"
@@ -110,11 +117,18 @@ d_test:
   noise_cfg:
     status: false
     noise_trans: 0.0
+  flow_cfg:
+    sub: 2
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.04
-    noise_rotation: 20
+    noise_translation: 0.03
+    noise_rotation: 25
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -166,11 +180,18 @@ d_train:
   noise_cfg:
     status: false
     noise_trans: 0
+  flow_cfg:
+    sub: 2
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   output_cfg:
-    overfitting_nr_idx: 10
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.04
-    noise_rotation: 20
+    noise_translation: 0.03
+    noise_rotation: 25
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false

@@ -124,7 +124,7 @@ d_test:
     dil_kernel_size: 2
     min_vis_size: 200
     max_matches: 1500
-    max_iterations: 2000
+    max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
@@ -155,13 +155,6 @@ d_test:
     visu:
       status: true
       return_img: true
-  flow_cfg:
-    sub: 3
-    min_matches: 50
-    dil_kernel_size: 2
-    min_vis_size: 200
-    max_matches: 1500
-    max_iterations: 3000
 d_train:
   name: "ycb"
   objects: 21
@@ -187,7 +180,13 @@ d_train:
   noise_cfg:
     status: false
     noise_trans: 0
-  
+  flow_cfg:
+    sub: 2
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 1500
+    max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: 100
     vm_in_dataloader: true

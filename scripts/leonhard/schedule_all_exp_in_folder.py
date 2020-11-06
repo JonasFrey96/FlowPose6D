@@ -6,8 +6,6 @@ For execution run:
 python scripts/leonhard/schedule_all_exp_in_folder.py --exp=t24h --time=24
 
 """
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--exp', default='t24h',  required=True,
                     help='Folder containing experiment yaml file.')
@@ -16,7 +14,9 @@ parser.add_argument('--time', default=24, required=True,
 args = parser.parse_args()
 print(args.time)
 
-if args.time == '24':
+if args.time == '120':
+  s1 = '119:59'
+elif args.time == '24':
   s1 = '23:59'
 elif args.time == '4':
   s1 = '3:59'
