@@ -25,8 +25,10 @@ elif  isinstance( args.time, str):
   s1 = args.time
 else:
   raise Exception
+from os.path import expanduser
+home = expanduser("~")
 
-p = f'/cluster/home/jonfrey/PLR3/yaml/exp/{args.exp}/'
+p = f'{home}/PLR3/yaml/exp/{args.exp}/'
 exps = [str(p) for p in Path(p).rglob('*.yml')]
 
 import yaml
@@ -41,6 +43,6 @@ for j,e in enumerate(exps):
 
 for j, e in enumerate(exps):
   
-  cmd = f"""cd /cluster/home/jonfrey/PLR3 && bsub -n 20 -W {s1} -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=16000]" ./scripts/leonhard/submit.sh --exp={e} --env=yaml/env/env_leonhard_jonas.yml"""
+  cmd = f"""cd {home}/PLR3 && bsub -n 20 -W {s1} -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=16000]" ./scripts/leonhard/submit.sh --exp={e} --env=yaml/env/env_leonhard_jonas.yml"""
   os.system(cmd)
   print(f'Run: {j}, Exp: {e}, Time: {s1}h')

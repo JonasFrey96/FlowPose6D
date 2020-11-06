@@ -521,7 +521,6 @@ class TrackNet6D(LightningModule):
         loss = torch.mean(dis)
         if not suc:
             return {f'{self._mode}_loss': loss}
-
         try:
             self._dict_track[f'{self._mode}_disparity  [+inf - 0]'].append(float(loss))
         except:
@@ -676,7 +675,6 @@ class TrackNet6D(LightningModule):
         if not 'avg_val_disparity  [+inf - 0]' in avg_dict.keys():
             avg_dict['avg_val_disparity  [+inf - 0]'] = 999
         avg_val_disparity_float = float(avg_dict['avg_val_disparity  [+inf - 0]'])
-
 
         return {'avg_val_disparity_float': avg_val_disparity_float,
                 'avg_val_disparity': torch.tensor( avg_dict['avg_val_disparity  [+inf - 0]'] ),
@@ -962,11 +960,12 @@ if __name__ == "__main__":
     model = TrackNet6D(**dic)
 
     early_stop_callback = EarlyStopping(
-        monitor='avg_val_disparity_float',
+        monitor='avg_val_disparity',
         patience=exp.get('early_stopping_cfg', {}).get('patience', 100),
-        strict=True,
+        strict=False,
         verbose=True,
-        mode='min'
+        mode='min',
+        min_delta = exp.get('early_stopping_cfg', {}).get('min_delta', -0.1)
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -986,7 +985,8 @@ if __name__ == "__main__":
     # early_stop_callback=early_stop_callback,
     trainer = Trainer(**exp['trainer'],
         checkpoint_callback=checkpoint_callback,
-        default_root_dir=exp['model_path'])
+        default_root_dir=exp['model_path'],
+        callbacks=[early_stop_callback])
 
     if exp.get('model_mode', 'fit') == 'fit':
         # lr_finder = trainer.lr_find(

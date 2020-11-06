@@ -78,16 +78,14 @@ class EfficientDisparity(nn.Module):
     # is it smart to have the residual skip connections only for the real image of course the information should be given for the real image but therfore the network needs to learn how to fully encode the rendered image correctly
     # data BS, C, H, W
     BS,C,H,W = data.shape
-
     real = self.up_in(data[:,:3] )
     render =  self.up_in(data[:,3:6] )
-    
-    
+    if self.depth_backbone:
+      data[:,6:] = data[:,6:]/10000
+      
     for i in range(BS):
       real[i] = self.input_trafos( real[i] ) 
       render[i] = self.input_trafos( render[i] )
-      if self.depth_backbone:
-        data[i,6:] = self.norm_depth( data[i,6:])  
 
     if self.depth_backbone: 
       real_d =  self.up_nn_in(data[:,6][:,None,:,:] ) 
