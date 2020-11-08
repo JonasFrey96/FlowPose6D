@@ -128,8 +128,7 @@ class EfficientDisparity(nn.Module):
     return flow, segmentation
 
 if  __name__ == "__main__":
-  from torchsummary import summary
-  model = EfficientDisparity(num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2, depth_backbone = True)
+  model = EfficientDisparity(num_classes = 22, backbone= 'efficientnet-b4', connections_encoder_decoder = 2, depth_backbone = True)
   BS = 2
   H = 480
   W = 640
@@ -139,4 +138,3 @@ if  __name__ == "__main__":
   data = torch.ones( (BS,C,H,W), device=device )
   model = model.to(device)
   out = model(data, idx =None)
-  summary( model, (C,H,W) )
