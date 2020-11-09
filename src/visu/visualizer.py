@@ -143,11 +143,12 @@ class Visualizer():
             u = int(u)
             for v_, v in enumerate( np.linspace( float( tl[1] ) , float( br[1] ), num=w).tolist()):
                 v = int(v)
-                arr[u,v] = np.uint8( np.array(self.cmapflow[dir_bin[u_,v_]])*255 )
+                if u > 0 and u < h and v > 0 and v < w:
+                    arr[u,v] = np.uint8( np.array(self.flow_cmap[dir_bin[u_,v_]])*255 )
 
         mask = mask[:,:,None].repeat(1,1,4).type(torch.bool).numpy()
         arr_img[mask] = arr[ mask]
-        pil_img = Image.fromarray(arr_img,'RGBA')
+        pil_img = Image.fromarray(arr_img[:,:,:3],'RGB')
         if method != 'def':
             return np.array(pil_img).astype(np.uint8)
         if jupyter:

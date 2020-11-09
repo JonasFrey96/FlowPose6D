@@ -129,7 +129,12 @@ class TrackNet6D(LightningModule):
 
         # self.pixelwise_refiner = PixelwiseRefiner(
         #     input_channels=6, num_classes=22, growth_rate=16)
+
         self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
+        if exp['flownet']:
+            from model import FlownetDisparity 
+            self.pixelwise_refiner = FlownetDisparity.from_weights(
+                22, '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar')
 
         # df stands for DenseFusion
         if exp.get('model', {}).get('df_refine', False):
@@ -257,20 +262,35 @@ class TrackNet6D(LightningModule):
             gt_label_obj = (gt_label_cropped ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
             flow_mask_in = flow_mask == True# BS,H,W
             suc1,  h_gt_flow__gt_label = flow_to_trafo_PnP( 
-                real_br = real_br[b], 
-                real_tl = real_tl[b], 
-                ren_br = ren_br[b], 
-                ren_tl = ren_tl[b], 
-                flow_mask = gt_label_obj[b], 
-                u_map = u_map[b].type( typ ), 
-                v_map = v_map[b].type( typ ), 
-                K_ren = self.K_ren.type( typ ), 
-                K_real = K_real.type( typ ), 
-                render_d = render_d[b].type( typ ), 
-                h_render = h_render[b].type( typ ),
+                real_br = real_br[b].clone(), 
+                real_tl = real_tl[b].clone(), 
+                ren_br = ren_br[b].clone(), 
+                ren_tl = ren_tl[b].clone(), 
+                flow_mask = gt_label_obj[b].clone(), 
+                u_map = u_map[b].type( typ ).clone(), 
+                v_map = v_map[b].type( typ ).clone(), 
+                K_ren = self.K_ren.type( typ ).clone(), 
+                K_real = K_real.type( typ ).clone(), 
+                render_d = render_d[b].type( typ ).clone(), 
+                h_render = h_render[b].type( typ ).clone(),
                 h_real_est = h_real_est.type( typ ).clone())
             # Calculate pred_flow__flow_mask 
+
             typ =  flow[b, 0, :, :].dtype
+            suc4,  h_pred_flow__gt_label = flow_to_trafo_PnP( 
+                real_br = real_br[b].clone(), 
+                real_tl = real_tl[b].clone(), 
+                ren_br = ren_br[b].clone(), 
+                ren_tl = ren_tl[b].clone(), 
+                flow_mask = gt_label_obj[b].clone(), 
+                u_map = flow[b, 0, :, :].type( typ ).clone(), 
+                v_map = flow[b, 1, :, :].type( typ ).clone(), 
+                K_ren = self.K_ren.type( typ ).clone(), 
+                K_real = K_real.type( typ ).clone(), 
+                render_d = render_d[b].type( typ ).clone(), 
+                h_render = h_render[b].type( typ ).clone(),
+                h_real_est = h_real_est.type( typ ).clone())
+            
             suc2,  h_pred_flow__flow_mask = flow_to_trafo_PnP( 
                 real_br = real_br[b], 
                 real_tl = real_tl[b], 
@@ -301,20 +321,7 @@ class TrackNet6D(LightningModule):
                 h_render = h_render[b].type( typ ),
                 h_real_est = h_real_est.type( typ ).clone())
             
-            typ =  flow[b, 0, :, :].dtype
-            suc4,  h_pred_flow__gt_label = flow_to_trafo_PnP( 
-                real_br = real_br[b], 
-                real_tl = real_tl[b], 
-                ren_br = ren_br[b], 
-                ren_tl = ren_tl[b], 
-                flow_mask = gt_label_obj[b], 
-                u_map = flow[b, 0, :, :].type( typ ), 
-                v_map = flow[b, 1, :, :].type( typ ), 
-                K_ren = self.K_ren.type( typ ), 
-                K_real = K_real.type( typ ), 
-                render_d = render_d[b].type( typ ), 
-                h_render = h_render[b].type( typ ),
-                h_real_est = h_real_est.type( typ ).clone())
+
 
             suc = suc1 and suc2 and suc3 and suc4
 
@@ -323,7 +330,17 @@ class TrackNet6D(LightningModule):
             self._k += 1
             self.counter_images_logged += 1
             mask = (flow_mask == True)
-            
+
+            self.visualizer.flow_to_gradient(tag = f'gt_flow_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
+                img = real_img[0].cpu().type(torch.float32), flow =  uv_gt[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
+                mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
+                store=True, jupyter=False, method='left')
+            self.visualizer.flow_to_gradient(tag = f'left_gt__right_pred_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
+                img = real_img[0].cpu().type(torch.float32), flow = flow[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
+                mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
+                store=True, jupyter=False, method='right')
+
+
             self.visualizer.plot_translations(
                 tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
                 epoch = self.current_epoch,
@@ -482,10 +499,12 @@ class TrackNet6D(LightningModule):
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
         loss = w_s * focal_loss + w_f * flow_loss  #dis + w_t * translation_loss
-
+        
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())
         log_scalars[f'loss_flow'] = float(torch.mean(flow_loss, dim=0).detach())
+        fl = log_scalars[f'loss_flow']
+
 
         return loss, log_scalars, suc
     def on_epoch_start(self):
@@ -657,9 +676,9 @@ class TrackNet6D(LightningModule):
 
         tensorboard_logs = {f'{self._mode}_disparity': float(loss)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
-        pb = {'L_Seg': log_scalars['loss_segmentation'], 'L_Flow': log_scalars['loss_flow'], 'ADD-S pF_gtL': log_scalars['adds_pred_flow__gt_label'] }
-
-        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs, 'progress_bar': pb  }
+        pb = {'L_Seg': log_scalars['loss_segmentation'], 'L_Flow': log_scalars['loss_flow'], 'ADD_S': log_scalars['adds_pred_flow__gt_label'] }
+        
+        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs, 'progress_bar': pb }
    
 
     def visu_step(self, nr, batch, pred_r, pred_t, batch_idx):

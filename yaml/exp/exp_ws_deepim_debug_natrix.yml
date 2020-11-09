@@ -1,9 +1,9 @@
-model_path: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/eval/_" #overfit_1_batch_bs_1
-
-checkpoint_restore: true
+model_path: "/media/scratch1/jonfrey/models/runs/flownet_train/t1/_" #overfit_1_batch_bs_1
+flownet: True
+checkpoint_restore: false
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/2020-11-08T00:36:57_b4_res2_loss_5to1_lr5-4_no_depth_no_skip_24h/epoch=96-avg_val_disparity_float=15.5202.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
-model_mode: test #fit #test
+model_mode: fit #fit #test
 
 model:
   df_load: False
@@ -38,7 +38,7 @@ loss:
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-3
+lr: 1.0e-6
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -62,7 +62,7 @@ trainer:
   fast_dev_run: false
   limit_train_batches: 50
   limit_val_batches: 50
-  limit_test_batches: 20
+  limit_test_batches: 1000
   progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false
@@ -82,14 +82,14 @@ visu:
   number_images_log_val: 2
   network_input_batch: False
   log_to_file: False
-  always_calculate: True
-  full_val: True
+  always_calculate: False
+  full_val: False
 
 early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 2
+  batch_size: 4
   num_workers: 4
   shuffle: True
   pin_memory: True
