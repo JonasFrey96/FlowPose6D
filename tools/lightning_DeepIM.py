@@ -60,6 +60,7 @@ from model import EfficientDisparity
 import torch.autograd.profiler as profiler
 
 from deep_im import flow_to_trafo
+from deep_im import flow_to_trafo_PnP
 from scipy.spatial.transform import Rotation as R
 
 def check_exp(exp):
@@ -180,7 +181,11 @@ class TrackNet6D(LightningModule):
             log = open(f'{mp}/Live_Logger_Lightning.log', "a")
             sys.stdout = log
             print('Logging to File')
-        self.adds_mets = ['init','res_gt_flow','res_pred_flow','res_pred2_flow_and_mask']
+        self.adds_mets = ['init','gt_flow__gt_label', 'pred_flow__gt_label','pred_flow__flow_mask','pred_flow__pred_label']
+            
+        self.df_failed = pd.DataFrame(columns= ['ID'])
+        self.df = pd.DataFrame(columns= self.adds_mets )
+
 
     def forward(self, batch):
         suc = True
@@ -212,7 +217,7 @@ class TrackNet6D(LightningModule):
 
         real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
         pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
-        u_map, v_map, flow_mask, bb = batch[24:]
+        u_map, v_map, flow_mask, bb, depth_render_original = batch[24:]
         data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
         data = data.permute(0,3,1,2) # BS,C,H,W
 
@@ -248,76 +253,72 @@ class TrackNet6D(LightningModule):
             h_real_est[:3,3] = torch.tensor( pred_trans[b] ,device=self.device )
             
             typ = u_map.dtype
-        
-            # Calculate erroded gt_labels
-            ero_in = (gt_label_cropped ==  unique_desig[1][:,None,None].repeat(1,480,640)   )[:,None,:,:].type(u_map.dtype) # BS,C,H,w
-            t_size = get_scale_for_erosion(ero_in).type( u_map.dtype )
-            ero_out = eroision_batch(ero_in,t_size).type( u_map.dtype )
-            fmt = flow_mask.dtype
-            flow_mask_ero  = (flow_mask * ero_out.type(torch.float32)).type(fmt)[:,0]
-
-            suc, P_real_in_center, P_ren_in_center, P_real_trafo, T_res = flow_to_trafo(
+            # Calculate gt_flow__gt_label 
+            gt_label_obj = (gt_label_cropped ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
+            flow_mask_in = flow_mask == True# BS,H,W
+            suc1,  h_gt_flow__gt_label = flow_to_trafo_PnP( 
                 real_br = real_br[b], 
-                real_tl =  real_tl[b], 
+                real_tl = real_tl[b], 
                 ren_br = ren_br[b], 
                 ren_tl = ren_tl[b], 
-                flow_mask = flow_mask_ero[b], 
+                flow_mask = gt_label_obj[b], 
                 u_map = u_map[b].type( typ ), 
                 v_map = v_map[b].type( typ ), 
-                K_real = K_real.type( typ ), 
                 K_ren = self.K_ren.type( typ ), 
-                real_d = real_d[b].type( typ ), 
+                K_real = K_real.type( typ ), 
                 render_d = render_d[b].type( typ ), 
-                h_real = h_real_est.type( typ ), 
-                h_render = h_render[b].type( typ ))
-
-            if anal_tensor( T_res, 'T_res GT Flow', print_on_error = True):
-                raise Exception('T_res GT Flow contains inf or nan')
-
-            
-            h_real_new_est =  T_res @ h_render[0].type(typ) # set rotation
-            typ = flow[b, 0, :, :].dtype
-            
-            suc_, P_real_in_center, P_ren_in_center, P_real_trafo, T_res= flow_to_trafo(
+                h_render = h_render[b].type( typ ),
+                h_real_est = h_real_est.type( typ ).clone())
+            # Calculate pred_flow__flow_mask 
+            typ =  flow[b, 0, :, :].dtype
+            suc2,  h_pred_flow__flow_mask = flow_to_trafo_PnP( 
                 real_br = real_br[b], 
-                real_tl =  real_tl[b], 
+                real_tl = real_tl[b], 
                 ren_br = ren_br[b], 
                 ren_tl = ren_tl[b], 
-                flow_mask = flow_mask_ero[b],
+                flow_mask = flow_mask_in[b], 
                 u_map = flow[b, 0, :, :].type( typ ), 
                 v_map = flow[b, 1, :, :].type( typ ), 
-                K_real = K_real.type( typ ), 
                 K_ren = self.K_ren.type( typ ), 
-                real_d = real_d[b].type( typ ), 
+                K_real = K_real.type( typ ), 
                 render_d = render_d[b].type( typ ), 
-                h_real = h_real_est.type( typ ), 
-                h_render = h_render[b].type( typ ))
-            suc = suc and suc_
-            h_real_new_est_pred_flow =  T_res @ h_render[0] # set rotation
+                h_render = h_render[b].type( typ ),
+                h_real_est = h_real_est.type( typ ).clone())
 
-            # Calculate erroded perdicted labels
-            seg_max = p_label.argmax(dim=1)
-            ero_in = (seg_max ==  unique_desig[1][:,None,None].repeat(1,480,640)   )[:,None,:,:].type(u_map.dtype) # BS,C,H,w
-            t_size = get_scale_for_erosion(ero_in).type( u_map.dtype )
-            valid_flow = eroision_batch(ero_in,t_size).type( torch.bool )[:,0]
-            
-            suc_, _,_,_ , T_res= flow_to_trafo(
+            # Calculate pred_flow__pred_label
+            pred_seg_mask = ( p_label.argmax(dim=1) ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
+            suc3, h_pred_flow__pred_label = flow_to_trafo_PnP( 
                 real_br = real_br[b], 
-                real_tl =  real_tl[b], 
+                real_tl = real_tl[b], 
                 ren_br = ren_br[b], 
                 ren_tl = ren_tl[b], 
-                flow_mask = valid_flow[b], 
+                flow_mask = pred_seg_mask[b], 
                 u_map = flow[b, 0, :, :].type( typ ), 
                 v_map = flow[b, 1, :, :].type( typ ), 
-                K_real = K_real.type( typ ), 
-                real_d = real_d[b].type( typ ), 
                 K_ren = self.K_ren.type( typ ), 
+                K_real = K_real.type( typ ), 
                 render_d = render_d[b].type( typ ), 
-                h_real = h_real_est.type( typ ), 
-                h_render = h_render[b].type( typ ))
-            suc = suc and suc_
-            h_real_pred_flow_and_mask =  T_res @ h_render[0] # set rotation
-        
+                h_render = h_render[b].type( typ ),
+                h_real_est = h_real_est.type( typ ).clone())
+            
+            typ =  flow[b, 0, :, :].dtype
+            suc4,  h_pred_flow__gt_label = flow_to_trafo_PnP( 
+                real_br = real_br[b], 
+                real_tl = real_tl[b], 
+                ren_br = ren_br[b], 
+                ren_tl = ren_tl[b], 
+                flow_mask = gt_label_obj[b], 
+                u_map = flow[b, 0, :, :].type( typ ), 
+                v_map = flow[b, 1, :, :].type( typ ), 
+                K_ren = self.K_ren.type( typ ), 
+                K_real = K_real.type( typ ), 
+                render_d = render_d[b].type( typ ), 
+                h_render = h_render[b].type( typ ),
+                h_real_est = h_real_est.type( typ ).clone())
+
+            suc = suc1 and suc2 and suc3 and suc4
+
+
         if self.visu_forward:
             self._k += 1
             self.counter_images_logged += 1
@@ -341,19 +342,19 @@ class TrackNet6D(LightningModule):
                 method= 'right')
 
             
-            self.visualizer.plot_segmentation(tag=f'_',
-                                                epoch=self.current_epoch,
-                                                label=flow_mask_ero[b].type(torch.bool).cpu(
-                                                ).numpy(),
-                                                store=True,
-                                                method='left')
+            # self.visualizer.plot_segmentation(tag=f'_',
+            #                                     epoch=self.current_epoch,
+            #                                     label=flow_mask_ero[b].type(torch.bool).cpu(
+            #                                     ).numpy(),
+            #                                     store=True,
+            #                                     method='left')
             
-            self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
-                                                epoch=self.current_epoch,
-                                                label=valid_flow[b].type(torch.bool).cpu(
-                                                ).numpy(),
-                                                store=True,
-                                                method='right')
+            # self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
+            #                                     epoch=self.current_epoch,
+            #                                     label=valid_flow[b].type(torch.bool).cpu(
+            #                                     ).numpy(),
+            #                                     store=True,
+                                                # method='right')
 
             seg_max = p_label.argmax(dim=1)
             self.visualizer.plot_segmentation(tag=f'_',
@@ -388,22 +389,23 @@ class TrackNet6D(LightningModule):
                                                 render_img=render_img[b],
                                                 store=True,
                                                 method='right')
-            
+
+
             self.visualizer.plot_estimated_pose(    tag = f"_",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points = copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_new_est.cpu().numpy(),
+                                        H = h_gt_flow__gt_label.cpu().numpy(),
                                         method='left')
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow_trafo, right pred_flow_trafo)_{self._mode}_nr_{self.counter_images_logged}",
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow__gt_label, right pred_flow__flow_mask)_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points = copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_new_est_pred_flow.detach().cpu().numpy(),
+                                        H = h_pred_flow__flow_mask.detach().cpu().numpy(),
                                         method='right')
 
  
@@ -413,15 +415,15 @@ class TrackNet6D(LightningModule):
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real[b].cpu().numpy(), 
+                                        H = h_gt_flow__gt_label.cpu().numpy(), 
                                       method='left' )
-            self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_pose, right pred_flow_trafo)_{self._mode}_nr_{self.counter_images_logged}",
+            self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_flow__gt_label, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_new_est_pred_flow.detach().cpu().numpy(),
+                                        H = h_pred_flow__pred_label.detach().cpu().numpy(),
                                         method='right')
             self.visualizer.plot_estimated_pose(    tag = f"_",
                                         epoch = self.current_epoch,
@@ -431,30 +433,52 @@ class TrackNet6D(LightningModule):
                                         K = K_real.cpu().numpy(),
                                         H = h_real_est.cpu().numpy(), 
                                         method='left' )
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left input_pose, right pred_flow_trafo)_{self._mode}_nr_{self.counter_images_logged}",
+            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left Input Pose, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
                                         epoch = self.current_epoch,
                                         img= real_img_original[b].cpu().numpy(),
                                         points =copy.deepcopy(model_points[b].cpu().numpy()),
                                         store = True,
                                         K = K_real.cpu().numpy(),
-                                        H = h_real_new_est_pred_flow.detach().cpu().numpy(),
+                                        H = h_pred_flow__pred_label.detach().cpu().numpy(),
                                         method='right')
+        
         if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
             target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,model_points.shape[1],1)
+        
+
+            h_gt_flow__gt_label,h_pred_flow__flow_mask, h_pred_flow__pred_label, h_real_est, h_real
+
             # Compute ADD-S
-            adds_res_gt_flow = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_new_est[None].type( target.dtype) )
-            adds_res_pred_flow = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_new_est_pred_flow[None].type( target.dtype))
-            adds_res_pred2_flow_and_mask = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_pred_flow_and_mask[None].type( target.dtype))
-            
+            adds_h_gt_flow__gt_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_gt_flow__gt_label [None].type( target.dtype) )
+            adds_h_pred_flow__flow_mask  = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__flow_mask[None].type( target.dtype))
+            adds_h_pred_flow__pred_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__pred_label[None].type( target.dtype))
+            adds_h_pred_flow__gt_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__gt_label[None].type( target.dtype))
             adds_init = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_est[None].type( target.dtype))
+            
 
             # adds_gt = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real[0][None])
             # log scalars            
             log_scalars[f'adds_init'] = float(adds_init.detach())
-            log_scalars[f'adds_res_gt_flow'] = float(adds_res_gt_flow.detach())
-            log_scalars[f'adds_res_pred_flow'] = float(adds_res_pred_flow.detach())
-            log_scalars[f'adds_res_pred2_flow_and_mask'] = float(adds_res_pred2_flow_and_mask.detach())
-            
+            log_scalars[f'adds_gt_flow__gt_label'] = float(adds_h_gt_flow__gt_label.detach())
+            log_scalars[f'adds_pred_flow__gt_label'] = float(adds_h_pred_flow__gt_label.detach())
+            log_scalars[f'adds_pred_flow__flow_mask'] = float(adds_h_pred_flow__flow_mask.detach())
+            log_scalars[f'adds_pred_flow__pred_label'] = float(adds_h_pred_flow__pred_label.detach())
+        if self._mode == 'test':
+            if not suc:
+                try:
+                    self.df_failed.append({'ID': int( unique_desig[1])}, ignore_index=True)
+                except:
+                    print("Failed adding error id during testing")
+            else:
+                try:
+                    col = ['ID'] + self.adds_mets 
+                    test_values = [log_scalars.get("adds_"+key) for key in self.adds_mets]
+                    test_values = [int( unique_desig[1])] + test_values
+                    res = {col[i]: test_values[i] for i in range(len(col))} 
+                    self.df = self.df.append(res, ignore_index=True)
+                except:
+                    print("Failed adding obj during testing")
+
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
         loss = w_s * focal_loss + w_f * flow_loss  #dis + w_t * translation_loss
@@ -462,7 +486,7 @@ class TrackNet6D(LightningModule):
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())
         log_scalars[f'loss_flow'] = float(torch.mean(flow_loss, dim=0).detach())
-        
+
         return loss, log_scalars, suc
     def on_epoch_start(self):
         self.counter_images_logged = 0
@@ -615,8 +639,8 @@ class TrackNet6D(LightningModule):
                 obj = int(unique_desig[1][0])
                 obj = self.obj_list[obj - 1]
 
-                na = f'{self._mode}_{n}adds_dis [+inf - 0]' 
-                na_obj =  f'{self._mode}_{obj}_{n}adds_dis [+inf - 0]' 
+                na = f'{self._mode}_{n}_adds_dis [+inf - 0]' 
+                na_obj =  f'{self._mode}_{obj}_{n}_adds_dis [+inf - 0]' 
 
                 value = log_scalars[f'adds_{n}'] 
 
@@ -634,8 +658,9 @@ class TrackNet6D(LightningModule):
 
         tensorboard_logs = {f'{self._mode}_disparity': float(loss)}
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
+        pb = {'L_Seg': log_scalars['loss_segmentation'], 'L_Flow': log_scalars['loss_flow'], 'ADD-S pF_gtL': log_scalars['adds_pred_flow__gt_label'] }
 
-        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs}
+        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs, 'progress_bar': pb  }
    
 
     def visu_step(self, nr, batch, pred_r, pred_t, batch_idx):
@@ -704,6 +729,17 @@ class TrackNet6D(LightningModule):
         return {**avg_dict, 'log': avg_dict}
 
     def test_epoch_end(self, outputs):
+        try:
+            ("="*89)
+            logging.info("="*89)
+            logging.info("Mean: \n \n " + str(self.df['ID'].value_counts()))
+            logging.info("="*89)
+            logging.info("Count Working: \n \n " + str(self.df.groupby(['ID']).mean()))
+            logging.info("="*89)
+            logging.info("Count Failed: \n \n " + str(self.df_failed.groupby(['ID']).value_counts()))
+            logging.info("="*89)
+        except:
+            pass
         self._k = 0
         self.counter_images_logged = 0  # reset image log counter
         avg_dict = {}
@@ -719,7 +755,7 @@ class TrackNet6D(LightningModule):
             p = old_key.find('adds_dis')
             if p != -1:
                 auc = compute_auc(self._dict_track[old_key])
-                avg_dict[old_key[:p] + 'auc [0 - 100]'] = auc
+                avg_dict[old_key[:p-1] + 'auc [0 - 100]'] = auc
 
             self._dict_track.pop(old_key, None)
 
@@ -730,26 +766,27 @@ class TrackNet6D(LightningModule):
                     nk = k 
                     nk = nk.replace(remove_key+' ', '')
                     nk = nk.replace(remove_key, '')
-                    print(nk)
+                    
                     new_dict[ nk ] = dic[k]
             return new_dict
         
-        avg_test_dis_float = float(avg_dict['avg_test_disparity  [+inf - 0]'])
-        try:
-            for n in self.adds_mets:
+        avg_test_dis_float = float(avg_dict['avg_test_gt_flow__gt_label_adds_dis [+inf - 0]'])
+        
+        for n in self.adds_mets:
+            try:
                 avg_in = filter_dict( avg_dict, n )
                 df1 = dict_to_df(avg_in)
                 # test_002_master_chef_can_res_gt_flow_auc [0 - 100]
 
                 df2 = dict_to_df(get_df_dict(pre='test'))
                 img = compare_df(df1, df2, key='auc [0 - 100]')
-                tag = f'test_table_res_{n}_vs_df'
+                tag = f'test_table_{n}_vs_df'
                 img.save(self.exp['model_path'] +
                         f'/visu/{self.current_epoch}_{tag}.png')
                 self.logger.experiment.add_image(tag, np.array(img).astype(
                     np.uint8), global_step=self.current_epoch, dataformats='HWC')
-        except:
-            pass
+            except:
+                pass
         return {f'avg_test_dis_float': avg_test_dis_float,
                 f'avg_test_dis': avg_dict['avg_test_disparity  [+inf - 0]'],
                 'log': avg_dict}
@@ -793,8 +830,12 @@ class TrackNet6D(LightningModule):
             cfg_env=self.env)
         store = self.env['p_ycb'] + '/viewpoints_renderings'
 
+
         dataloader_test = torch.utils.data.DataLoader(dataset_test,
-                                                      **self.exp['loader'])
+                                                      batch_size = 1,
+                                                      num_workers = self.exp['loader']['num_workers'],
+                                                      pin_memory= self.exp['loader']['pin_memory'],
+                                                      shuffle= True)
         self.K_ren = torch.tensor( dataloader_test.dataset._backend.get_camera('data_syn/0019', K=True), device=self.device )
         self.obj_list = list( dataloader_test.dataset._backend._name_to_idx_full.keys()) 
         return dataloader_test

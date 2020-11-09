@@ -31,6 +31,7 @@ class GenericDataset():
             self._batch_list = [
                 x for x in self._batch_list if x[0] in self._obj_list_fil]
         self._length = len(self._batch_list)
+        self._backend._length = len(self._batch_list)
 
     def __len__(self):
         return self._length

@@ -1,9 +1,9 @@
-model_path: "/media/scratch1/jonfrey/models/runs/efficient_disparity/debug/_" #overfit_1_batch_bs_1
+model_path: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/eval/_" #overfit_1_batch_bs_1
 
-checkpoint_restore: false
-checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_obj2/epoch=7-avg_val_dis_float=12.9083.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
+checkpoint_restore: true
+checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/2020-11-08T00:36:57_b4_res2_loss_5to1_lr5-4_no_depth_no_skip_24h/epoch=96-avg_val_disparity_float=15.5202.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
-model_mode: fit #test
+model_mode: test #fit #test
 
 model:
   df_load: False
@@ -26,10 +26,10 @@ model:
   sem_seg: True
 
 efficient_disp_cfg:
-  num_classes: 22 
-  backbone: 'efficientnet-b1'
-  connections_encoder_decoder: 3 # number of residual connections
-  depth_backbone: True
+  num_classes: 22
+  backbone: efficientnet-b4
+  connections_encoder_decoder: 0
+  depth_backbone: false
 
 loss:
   weight_semantic_segmentation: 10
@@ -56,13 +56,13 @@ eval:
 
 trainer:
   num_nodes: 1
-  precision: 32
+  precision: 16
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
   limit_train_batches: 50
   limit_val_batches: 50
-  limit_test_batches: 10
+  limit_test_batches: 20
   progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false
@@ -100,8 +100,7 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil:  #null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
-    - 2
+  obj_list_fil:  null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
   obj_list_sym:
     - 12
     - 15
@@ -129,7 +128,7 @@ d_test:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 20
+    noise_rotation: 25
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -161,8 +160,7 @@ d_train:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: #null # if not null add list with specific elements
-    - 2
+  obj_list_fil: null # if not null add list with specific elements
   obj_list_sym:
     - 12
     - 15

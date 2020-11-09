@@ -89,7 +89,8 @@ def multiplot(func):
                     img_f.astype(np.uint8), 
                     global_step=kwargs.get('epoch', 'Epoch_Is_Not_Defined_By_Pos_Arg'), 
                     dataformats='HWC')
-
+            if kwargs.get('jupyter', False):
+                display(Image.fromarray(img_f.astype(np.uint8)))
         return func(*args,**kwargs)
     return wrap
 
@@ -106,6 +107,59 @@ class Visualizer():
         # for mutliplot decorator 
         self.storage_left = None
         self.storage_right = None
+
+        self.flow_scale= 1000
+        Nc = int( np.math.pi*2 * self.flow_scale)
+        cmap = plt.cm.get_cmap('hsv', Nc)
+        self.flow_cmap = [cmap(i) for i in range(cmap.N)]
+        
+
+    @multiplot
+    def flow_to_gradient(self, tag, epoch,
+        img, flow, mask,tl=[0,0], br=[479,639],
+        store=False, jupyter=False, method='def'):
+        """
+        img torch.tensor(h,w,3)
+        flow torch.tensor(h,w,2)
+        mask torch.tensor(h,w) BOOL
+        call with either: 
+        flow_to_gradient( np.uint8( real_img.numpy() ), flow.clone(), (gt_label_cropped == idx+1) )
+        flow_to_gradient( np.uint8( img_orig.numpy() ), flow.clone(), (label_img == idx+1),  real_tl, real_br)
+        """
+
+
+        flow = flow
+        amp = torch.norm(flow, p=2, dim=2)
+        amp = amp / (torch.max(amp)+1.0e-6)  # normalize the amplitude
+        dir_bin = torch.atan2(flow[:, :, 0], flow[:, :, 1])
+        dir_bin *= self.flow_scale
+        dir_bin = dir_bin.type(torch.long)
+
+        h,w = 480,640
+        arr = np.zeros( (h,w,4), dtype=np.uint8)
+        arr_img = np.ones( (h,w,4), dtype=np.uint8) *255
+        arr_img[:,:,:3] = img
+        for u_ ,u in enumerate( np.linspace( float( tl[0] ) , float( br[0] ), num=h).tolist() ):
+            u = int(u)
+            for v_, v in enumerate( np.linspace( float( tl[1] ) , float( br[1] ), num=w).tolist()):
+                v = int(v)
+                arr[u,v] = np.uint8( np.array(self.cmapflow[dir_bin[u_,v_]])*255 )
+
+        mask = mask[:,:,None].repeat(1,1,4).type(torch.bool).numpy()
+        arr_img[mask] = arr[ mask]
+        pil_img = Image.fromarray(arr_img,'RGBA')
+        if method != 'def':
+            return np.array(pil_img).astype(np.uint8)
+        if jupyter:
+            display(pil_img)
+        if store:
+            pil_img.save(self.p_visu + str(epoch) +
+                         '_' + tag + '.png')
+        if self.writer is not None:
+            img_np = np.array(pil_img).astype(np.uint8)
+            self.writer.add_image(
+                tag, img_np, global_step=epoch, dataformats='HWC')
+
     @multiplot
     def plot_translations(self,
                           tag,

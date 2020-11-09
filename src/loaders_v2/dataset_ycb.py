@@ -105,6 +105,7 @@ class YCB(Backend):
             p=self._cfg_d['noise_cfg'].get('p_grey', 0))
         self._load_background()
         self.load_flow()
+        self.err = False
 
     def _load_background(self):
         p = self._cfg_env['p_background']
@@ -213,6 +214,8 @@ class YCB(Backend):
         unique_desig = (desig, obj_idx)
 
         if len(mask.nonzero()[0]) <= self._minimum_num_pt:
+            if self.err:
+                print("Violating in min number points in get Element")
             return False
 
         # take the noise color image
@@ -367,6 +370,8 @@ class YCB(Backend):
             st = time.time()
             new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
             if new_tup is False:
+                if self.err:
+                    print("Violation in get render data")
                 return False
             n_tup = (0, 0, 0, 0, tup[4], tup[5] , 0, 0,*tup[8:13])
             # n_tup += new_tu
@@ -423,13 +428,14 @@ class YCB(Backend):
         gt_rot_wxyz, gt_trans, unique_desig = batch[10:13]
 
         # set inital translation
-        init_trans = torch.normal(mean=torch.tensor(gt_trans), std=nt)
+        init_trans = torch.normal(mean=gt_trans, std=nt)
         init_trans[2] = init_trans[2]
         init_trans[1] = init_trans[1]
         # set inital rotaiton
         r1 = R.from_quat( re_quat( copy.copy(gt_rot_wxyz) , 'wxyz') ).as_matrix()
         animate = False
         def rel_h (h1,h2):
+            'Input numpy arrays'
             from pytorch3d.transforms import so3_relative_angle
             return so3_relative_angle(torch.tensor( h1 ) [:3,:3][None], torch.tensor( h2 ) [:3,:3][None])
             
@@ -465,6 +471,8 @@ class YCB(Backend):
         b = bb_lsd[0]
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
+            if self.err:
+                print("Violate BB in get render data for rendered bb")
             return False
 
         K1 = self.get_camera('data_syn/0019', K=True)
@@ -492,7 +500,8 @@ class YCB(Backend):
         b = bb_lsd[0]
         tl, br = b.limit_bb()
         if br[0] - tl[0] < 30 or br[1] - tl[1] < 30 or b.violation():
-            # TODO invalid sample
+            if self.err:
+                print("Violate BB in get render data for real bb")
             return False
         center_real = backproject_points(
             init_trans[None], fx=cam[2], fy=cam[3], cx=cam[0], cy=cam[1])
@@ -523,6 +532,8 @@ class YCB(Backend):
         st = time.time()
         flow = self.get_flow(h_render[0].numpy(), h_real, obj_idx ,label.numpy(), cam_flag, b_real, b_ren )
         if type( flow ) is bool: 
+            if self.err:
+                print("Flow calc failed")
             return False
         
 
@@ -561,7 +572,7 @@ class YCB(Backend):
         if self._cfg_d['output_cfg'].get('norm_real', False):
             real_img = self._norm_real(real_img)
         
-        return (real_img, render_img, real_d[:,:,0], render_d[:,:,0], gt_label_cropped.type(torch.long)[:,:,0], init_rot_wxyz.type(torch.float32), init_trans.type(torch.float32), pred_points.type(torch.float32), h_render[0].type(torch.float32), torch.from_numpy(np.float32( h_real )), img_ren[0], torch.from_numpy( u_cropped_scaled[:,:] ).type(torch.float32), torch.from_numpy( v_cropped_scaled[:,:]).type(torch.float32), torch.from_numpy(valid_flow_mask_cropped[:,:,0]), flow[-4:])
+        return (real_img, render_img, real_d[:,:,0], render_d[:,:,0], gt_label_cropped.type(torch.long)[:,:,0], init_rot_wxyz.type(torch.float32), init_trans.type(torch.float32), pred_points.type(torch.float32), h_render[0].type(torch.float32), torch.from_numpy(np.float32( h_real )), img_ren[0], torch.from_numpy( u_cropped_scaled[:,:] ).type(torch.float32), torch.from_numpy( v_cropped_scaled[:,:]).type(torch.float32), torch.from_numpy(valid_flow_mask_cropped[:,:,0]), flow[-4:], depth)
     
     def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
         st___ = time.time()
