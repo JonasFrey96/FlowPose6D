@@ -1,13 +1,12 @@
-model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flownet_train_disp/24h_flownet
-flownet: true
-checkpoint_restore: true
-checkpoint_load: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flownet_train_disp/2020-11-10T07:57:42__/epoch=5-avg_val_disparity_float=17.2494.ckpt
+model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b6_depth_no_skip_l1
+checkpoint_restore: false
+checkpoint_load: 'false'
 mail: false
 model_mode: fit
 model:
-  df_load: false
-  df_refiner: /media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth
-  df_pose_estimator: /media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth
+  df_load: true
+  df_refiner: /cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth
+  df_pose_estimator: /cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth
   df_refine: false
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
@@ -25,21 +24,22 @@ model:
   sem_seg: true
 efficient_disp_cfg:
   num_classes: 22
-  backbone: efficientnet-b4
+  backbone: efficientnet-b6
   connections_encoder_decoder: 0
-  depth_backbone: false
+  depth_backbone: true
 loss:
-  weight_semantic_segmentation: 0
-  weight_flow: 1
+  weight_semantic_segmentation: 5
+  weight_flow: 0
   weight_pose: 0
-  weight_trans: 1
+  weight_trans: 0
+  weight_flow_l1: 1
 epochs: 500
 lr: 5.0e-05
 lr_cfg:
   on_plateau_cfg:
     mode: min
-    factor: 0.2
-    threshold: 0.1
+    factor: 0.5
+    threshold: 0.05
   interval: epoch
   frequency: 1
 vm:
@@ -74,12 +74,12 @@ visu:
   network_input_batch: false
   log_to_file: true
   always_calculate: false
-  full_val: true
+  full_val: false
 early_stopping_cfg:
-  patience: 20
+  patience: 30
   min_delta: -0.1
 loader:
-  batch_size: 16
+  batch_size: 4
   num_workers: 18
   shuffle: true
   pin_memory: true
@@ -175,10 +175,10 @@ d_train:
     max_matches: 1500
     max_iterations: 10000
   output_cfg:
-    overfitting_nr_idx: 100
+    overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 20
+    noise_rotation: 25
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false

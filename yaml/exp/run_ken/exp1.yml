@@ -1,4 +1,4 @@
-model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b4_depth_no_skip
+model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b4_depth_no_skip_FlowL1
 checkpoint_restore: false
 checkpoint_load: 'false'
 mail: false
@@ -25,13 +25,14 @@ model:
 efficient_disp_cfg:
   num_classes: 22
   backbone: efficientnet-b4
-  connections_encoder_decoder: 2
+  connections_encoder_decoder: 0
   depth_backbone: true
 loss:
   weight_semantic_segmentation: 5
-  weight_flow: 1
+  weight_flow: 0
   weight_pose: 0
   weight_trans: 0
+  weight_flow_l1: 1
 epochs: 500
 lr: 5.0e-05
 lr_cfg:

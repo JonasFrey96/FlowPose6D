@@ -1,4 +1,4 @@
-model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b6_skip_no_depth
+model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b6_no_skip_no_depth
 checkpoint_restore: false
 checkpoint_load: 'false'
 mail: false
@@ -25,7 +25,7 @@ model:
 efficient_disp_cfg:
   num_classes: 22
   backbone: efficientnet-b6
-  connections_encoder_decoder: 2
+  connections_encoder_decoder: 0
   depth_backbone: false
 loss:
   weight_semantic_segmentation: 5
@@ -73,12 +73,12 @@ visu:
   network_input_batch: false
   log_to_file: true
   always_calculate: false
-  full_val: true
+  full_val: false
 early_stopping_cfg:
   patience: 15
   min_delta: -0.1
 loader:
-  batch_size: 6
+  batch_size: 4
   num_workers: 18
   shuffle: true
   pin_memory: true

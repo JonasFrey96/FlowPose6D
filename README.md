@@ -15,15 +15,16 @@ cd ~/PLR3 && conda env create -f scripts/environment.yml
 
 Install efficientnet backbone
 ```
-pip install efficientnet_pytorch
-git clone https://github.com/JonasFrey96/EfficientNet-PyTorch.git
+cd ~ && git clone https://github.com/JonasFrey96/EfficientNet-PyTorch.git
+cd /EfficientNet-PyTorch
+pip install -e .
 ```
+
 Downloading the EfficientNet pertrained weights: 
 Dont start a bjobs !!!
 ```
 conda activate track3 
 cd ~/PLR3 && python src/model/efficient_disparity.py
-
 ```
 
 
@@ -44,17 +45,19 @@ or give your conda python track3 path directly as I did. ( but i guess its not n
 
 For debugging do the flowing: 
 ```
-
-```
 module load python_gpu/3.7.4 gcc/6.3.0
+```
+
 ```
 bsub -Is -n 20 -W 3:59 -R "rusage[mem=3000,ngpus_excl_p=1]" -R "select[gpu_mtotal0>=10240]" -R "rusage[scratch=16000]" bash
 conda activate track3
 ```
+
 Run the network with:
 ```
 conda activate track3
 ```
+
 Replace the exp file. In the exp file put the visu log_to_file = False so the network logs to the terminal. 
 ```
 cd ~/PLR3 && python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/t4h/exp1.yml

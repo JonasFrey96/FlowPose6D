@@ -11,6 +11,7 @@ parser.add_argument('--exp', default='t24h',  required=True,
                     help='Folder containing experiment yaml file.')
 parser.add_argument('--time', default=24, required=True,
                     help='Runtime.')
+parser.add_argument('--mem', default=10240, help='Min GPU Memory')
 args = parser.parse_args()
 print(args.time)
 
@@ -35,10 +36,10 @@ import yaml
 for j,e in enumerate(exps):
   print(e)
   with open(e) as f:
-      doc = yaml.load(f, Loader=yaml.FullLoader) 
+    doc = yaml.load(f, Loader=yaml.FullLoader) 
   doc['visu']['log_to_file'] = True
   with open(e, 'w+') as f:
-      yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+    yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
   
 
 for j, e in enumerate(exps):
