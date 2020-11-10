@@ -3,6 +3,35 @@
 ![](doc/TrackThis%20Kalman%20Filter.png)
 
 ## Instructions
+How to run the network: 
+```
+cd ~ 
+git clone -b pixelwise-refiner https://github.com/JonasFrey96/PLR3.git
+```
+Install track3 conda enviorment track3:
+```
+cd ~/PLR3 && conda env create -f scripts/environment.yml
+```
+
+Install efficientnet backbone
+```
+pip install efficientnet_pytorch
+git clone https://github.com/JonasFrey96/EfficientNet-PyTorch.git
+```
+Schedule Job on leonhard: (The exp flag is the path to a folder relative to PLR3/yaml/exp containg mutiple .yml exp files)
+Time is either in the format 4 24 or as a string 10:11
+```
+conda activate track3 
+python scripts/leonhard/schedule_all_exp_in_folder.py --exp=t24h --time=24
+```
+
+The only thing that might need some adaption is the `scripts/leonhard/submit.sh' script which contains the direct path to the conda enviroment. 
+Somehow i ran into issues with my installation and this fixed the bug. You might need to change tha last line to 
+```
+python tools/lightning_DeepIM.py $@
+```
+or give your conda python track3 path directly as I did. ( but i guess its not necesarry.)
+
 
 ### General
 
