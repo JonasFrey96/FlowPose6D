@@ -1,6 +1,6 @@
-model_path: "/media/scratch1/jonfrey/models/runs/flownet_train/t1/_" #overfit_1_batch_bs_1
-flownet: True
-checkpoint_restore: false
+model_path: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/L1_loss_refine/_" #overfit_1_batch_bs_1
+flownet: False
+checkpoint_restore: true
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/2020-11-08T00:36:57_b4_res2_loss_5to1_lr5-4_no_depth_no_skip_24h/epoch=96-avg_val_disparity_float=15.5202.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
 model_mode: fit #fit #test
@@ -31,14 +31,19 @@ efficient_disp_cfg:
   connections_encoder_decoder: 0
   depth_backbone: false
 
+refine_cfg:
+  iterations: 1
+  feedback: pred_flow_gt_label
+
 loss:
-  weight_semantic_segmentation: 10
-  weight_flow: 1
+  weight_semantic_segmentation: 5
+  weight_flow: 0
+  weight_flow_l1: 1
   weight_pose: 0
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-6
+lr: 1.0e-4
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -60,9 +65,9 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 50
-  limit_val_batches: 50
-  limit_test_batches: 1000
+  limit_train_batches: 1500
+  limit_val_batches: 10
+  limit_test_batches: 1500
   progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false
@@ -122,13 +127,13 @@ d_test:
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
-    max_matches: 1500
+    max_matches: 10000
     max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 25
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -183,13 +188,13 @@ d_train:
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
-    max_matches: 1500
+    max_matches: 10000
     max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: 100
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 20
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false

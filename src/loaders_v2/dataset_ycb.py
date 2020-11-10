@@ -125,7 +125,7 @@ class YCB(Backend):
         img = img.resize((w_g, h_g))
         return np.array(self._trancolor(img))
 
-    def getElement(self, desig, obj_idx):
+    def getElement(self, desig, obj_idx, h_real_est=None):
         """
         desig : sequence/idx
         two problems we face. What is if an object is not visible at all -> meta['obj'] = None
@@ -368,7 +368,7 @@ class YCB(Backend):
             h_real[:3,3] = gt_trans
 
             st = time.time()
-            new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag)
+            new_tup = self.get_rendered_data(tup, h_real, int(obj_idx) ,label, cam_flag, h_real_est)
             if new_tup is False:
                 if self.err:
                     print("Violation in get render data")
@@ -386,7 +386,7 @@ class YCB(Backend):
             return n_tup
         return tup
 
-    def get_rendered_data(self, batch, h_real, obj_idx, label,cam_flag):
+    def get_rendered_data(self, batch, h_real, obj_idx, label,cam_flag, h_real_est=None):
         """Get Rendered Data
 
         Args:
@@ -395,6 +395,7 @@ class YCB(Backend):
             obj_idx ([type]): [description]
             label ([type]): [description]
             cam_flag ([type]): [description]
+            h_real_est : 4,4 gives the inital estimate otherwise sampled around h_real
 
         Raises:
             Exception: [description]
@@ -429,16 +430,13 @@ class YCB(Backend):
 
         # set inital translation
         init_trans = torch.normal(mean=gt_trans, std=nt)
-        init_trans[2] = init_trans[2]
-        init_trans[1] = init_trans[1]
         # set inital rotaiton
         r1 = R.from_quat( re_quat( copy.copy(gt_rot_wxyz) , 'wxyz') ).as_matrix()
-        animate = False
         def rel_h (h1,h2):
             'Input numpy arrays'
             from pytorch3d.transforms import so3_relative_angle
             return so3_relative_angle(torch.tensor( h1 ) [:3,:3][None], torch.tensor( h2 ) [:3,:3][None])
-            
+        animate = False
         if animate:
             try:
                 self.animation_step += 1
@@ -459,6 +457,12 @@ class YCB(Backend):
         init_rot_mat = r2[None]
         init_rot_wxyz = torch.tensor( re_quat( R.from_matrix(init_rot_mat).as_quat()[0], 'xyzw') )
         
+        if not  ( h_real_est is None ): 
+            init_rot_mat = torch.tensor( h_real_est[:3,:3], dtype= torch.float32)[None]
+            init_rot_wxyz = torch.tensor( re_quat( R.from_matrix(init_rot_mat).as_quat()[0], 'xyzw') )
+            init_trans = torch.tensor( h_real_est[:3,3], dtype= torch.float32 )
+
+
         # transform points
         pred_points = torch.add((model_points @ init_rot_mat[0].T), init_trans)
         

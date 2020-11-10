@@ -95,8 +95,6 @@ def eroision_batch(t,t_size):
         kernel_tensor = torch.ones( (out_c,1,size,size) , device= t.device, dtype = t.dtype)
         t[b] = (torch.nn.functional.conv2d(t[b][None], kernel_tensor, padding=(int((size)/2), int((size)/2))) == (size*size))[0,:,:t.shape[2], :t.shape[3]]
     return t
-
-
 class TrackNet6D(LightningModule):
     def __init__(self, exp, env):
         super().__init__()
@@ -131,7 +129,7 @@ class TrackNet6D(LightningModule):
         #     input_channels=6, num_classes=22, growth_rate=16)
 
         self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
-        if exp['flownet']:
+        if exp.get( 'flownet', False):
             from model import FlownetDisparity 
             self.pixelwise_refiner = FlownetDisparity.from_weights(
                 22, '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar')
@@ -198,21 +196,9 @@ class TrackNet6D(LightningModule):
         if self.visualizer is None:
             self.visualizer = Visualizer(self.exp['model_path'] +
                                          '/visu/', self.logger.experiment)
-        bls = list( batch )
-        for j, e in enumerate( bls ) : 
-            if type(e) is torch.Tensor:
-                anal_tensor( e, f'{j}', print_on_error = True)
-        # unpack batch
-        #points, choose, img, target, model_points, idx = batch[0:6]
-        #depth_img, label, real_img_original, cam = batch[6:10]
-        model_points = batch[4]
-        idx = batch[5]  # Be carefull here the first objects starts with 0. Normally 0 is the NO object class in all other datastructures
-        real_img_original = batch[8]
-        cam = batch[9]
-        gt_rot_wxyz, gt_trans, unique_desig = batch[10:13] # unique_desig[1] contains the idx starting at 1 for the first object 
-        
+
         log_scalars = {}
-        bs = model_points.shape[0]
+        bs = batch[4].shape[0]
 
         # check if skip
         if batch[13] is False:
@@ -220,266 +206,324 @@ class TrackNet6D(LightningModule):
                 bs.shape, requires_grad=True, dtype=torch.float32, device=self.device)
             return loss, log_scalars, False
 
-        real_img, render_img, real_d, render_d, gt_label_cropped = batch[13:18]
-        pred_rot_wxyz, pred_trans, pred_points, h_render, h_real, render_img_original = batch[18:24]
-        u_map, v_map, flow_mask, bb, depth_render_original = batch[24:]
-        data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
-        data = data.permute(0,3,1,2) # BS,C,H,W
+        for iteration in range(self.exp.get('refine_cfg', {}).get('iterations',1 )):
 
-        if self.exp['efficient_disp_cfg'].get('depth_backbone'):
-            data_with_depth = data = torch.cat([data, real_d[:,None,:,:], render_d[:,None,:,:]], dim=1) 
-            flow, p_label = self.pixelwise_refiner(
-                data_with_depth, idx)
-        else:
-            flow, p_label = self.pixelwise_refiner(
-                data, idx)
-        # TODO idx is currently unused !!!!
-        
-        # print('P_Label', torch.max( p_label), torch.min( p_label))
-        # if torch.isnan(p_label).any():
-        #     p_label[:,:,:] = 0
+            
+            if iteration > 0:      
+                # Load data blocking when refineing ('useally only done in testing')                   
+                for b in range(1): 
+                    if self.exp['refine_cfg'].get('feedback', 'pred_flow_gt_label' ) == 'pred_flow_gt_label': 
+                        h = h_pred_flow__gt_label.cpu().numpy()
+                    elif self.exp['refine_cfg'].get('feedback', 'pred_flow_gt_label' ) == 'gt_flow_gt_label': 
+                        h = h_gt_flow__gt_label.cpu().numpy()
+                    else:
+                        raise Exception('Unknown Feedback during refinement')
+                    # get the new frame blocking the training process of the dataloader
+                    if self._mode == 'train' : 
+                        batch_new = self.trainer.train_dataloader.dataset._backend.getElement(unique_desig[0][b], int( unique_desig[1][b]), h)
+                    elif  self._mode == 'test' :
+                        batch_new = self.trainer.test_dataloaders[0].dataset._backend.getElement(unique_desig[0][b], int( unique_desig[1][b]), h)
+                    elif self._mode == 'val':
+                        batch_new = self.trainer.val_dataloaders[0].dataset._backend.getElement(unique_desig[0][b], int( unique_desig[1][b]), h)
+                    else:
+                        raise Exception('Unknown Mode during refinement')
 
-        focal_loss = self.criterion_focal(
-            p_label, gt_label_cropped)
-
-        ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
-        uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
-
-        flow_loss = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
-
-        if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
-            real_tl, real_br, ren_tl, ren_br = bb 
+                    if not( type(batch_new) is bool) :
+                        
+                        for i in range(len(batch)):
+                            if i == 27:
+                                for j in range(0,4):
+                                    batch[i][j][b] = batch_new[i][j]
+                            else:
+                                batch[i][b] = batch_new[i]
+                    else:
+                        print('Failed to load flow with the new pose estimate')
+                        
 
             b = 0
-            K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]], device=self.device )
+            model_points = batch[4]
+            idx = batch[5] # Be carefull here the first objects starts with 0. Normally 0 is the NO object class in all other datastructures
+            real_img_original = batch[8]
+            cam = batch[9]
+            gt_rot_wxyz = batch[10]
+            gt_trans =  batch[11] 
+            unique_desig = batch[12] # unique_desig[1] contains the idx starting at 1 for the first object 
             
-            h_real_est = torch.eye(4,device=self.device)
-            h_real_est[:3,:3] = quat_to_rot(pred_rot_wxyz[b][None,:], conv='wxyz', device=self.device)
-            h_real_est[:3,3] = torch.tensor( pred_trans[b] ,device=self.device )
             
-            typ = u_map.dtype
-            # Calculate gt_flow__gt_label 
-            gt_label_obj = (gt_label_cropped ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
-            flow_mask_in = flow_mask == True# BS,H,W
-            suc1,  h_gt_flow__gt_label = flow_to_trafo_PnP( 
-                real_br = real_br[b].clone(), 
-                real_tl = real_tl[b].clone(), 
-                ren_br = ren_br[b].clone(), 
-                ren_tl = ren_tl[b].clone(), 
-                flow_mask = gt_label_obj[b].clone(), 
-                u_map = u_map[b].type( typ ).clone(), 
-                v_map = v_map[b].type( typ ).clone(), 
-                K_ren = self.K_ren.type( typ ).clone(), 
-                K_real = K_real.type( typ ).clone(), 
-                render_d = render_d[b].type( typ ).clone(), 
-                h_render = h_render[b].type( typ ).clone(),
-                h_real_est = h_real_est.type( typ ).clone())
-            # Calculate pred_flow__flow_mask 
+            real_img = batch[13]
+            render_img = batch[14] 
+            real_d = batch[15]
+            render_d = batch[16]
+            gt_label_cropped = batch[17]
+            pred_rot_wxyz= batch[18]
+            pred_trans= batch[19]
+            pred_points= batch[20]
+            h_render= batch[21]
+            h_real= batch[22]
+            render_img_original= batch[23] 
+            u_map= batch[24]
+            v_map= batch[25]
+            flow_mask= batch[26]
+            bb= batch[27]
+            depth_render_original = batch[28]
 
-            typ =  flow[b, 0, :, :].dtype
-            suc4,  h_pred_flow__gt_label = flow_to_trafo_PnP( 
-                real_br = real_br[b].clone(), 
-                real_tl = real_tl[b].clone(), 
-                ren_br = ren_br[b].clone(), 
-                ren_tl = ren_tl[b].clone(), 
-                flow_mask = gt_label_obj[b].clone(), 
-                u_map = flow[b, 0, :, :].type( typ ).clone(), 
-                v_map = flow[b, 1, :, :].type( typ ).clone(), 
-                K_ren = self.K_ren.type( typ ).clone(), 
-                K_real = K_real.type( typ ).clone(), 
-                render_d = render_d[b].type( typ ).clone(), 
-                h_render = h_render[b].type( typ ).clone(),
-                h_real_est = h_real_est.type( typ ).clone())
+            data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
+            data = data.permute(0,3,1,2) # BS,C,H,W
+
+            if self.exp['efficient_disp_cfg'].get('depth_backbone'):
+                data_with_depth = data = torch.cat([data, real_d[:,None,:,:], render_d[:,None,:,:]], dim=1) 
+                flow, p_label = self.pixelwise_refiner(
+                    data_with_depth, idx)
+            else:
+                flow, p_label = self.pixelwise_refiner(
+                    data, idx)
             
-            suc2,  h_pred_flow__flow_mask = flow_to_trafo_PnP( 
-                real_br = real_br[b], 
-                real_tl = real_tl[b], 
-                ren_br = ren_br[b], 
-                ren_tl = ren_tl[b], 
-                flow_mask = flow_mask_in[b], 
-                u_map = flow[b, 0, :, :].type( typ ), 
-                v_map = flow[b, 1, :, :].type( typ ), 
-                K_ren = self.K_ren.type( typ ), 
-                K_real = K_real.type( typ ), 
-                render_d = render_d[b].type( typ ), 
-                h_render = h_render[b].type( typ ),
-                h_real_est = h_real_est.type( typ ).clone())
+            focal_loss = self.criterion_focal(
+                p_label, gt_label_cropped)
 
-            # Calculate pred_flow__pred_label
-            pred_seg_mask = ( p_label.argmax(dim=1) ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
-            suc3, h_pred_flow__pred_label = flow_to_trafo_PnP( 
-                real_br = real_br[b], 
-                real_tl = real_tl[b], 
-                ren_br = ren_br[b], 
-                ren_tl = ren_tl[b], 
-                flow_mask = pred_seg_mask[b], 
-                u_map = flow[b, 0, :, :].type( typ ), 
-                v_map = flow[b, 1, :, :].type( typ ), 
-                K_ren = self.K_ren.type( typ ), 
-                K_real = K_real.type( typ ), 
-                render_d = render_d[b].type( typ ), 
-                h_render = h_render[b].type( typ ),
-                h_real_est = h_real_est.type( typ ).clone())
+            ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
+            uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
+
+            flow_loss_l1 = torch.sum(  torch.pow( torch.norm ( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1, p=1 ) + 0.0001 , 0.9) , dim=(1,2))   / torch.sum( ind[:,0,:,:], (1,2))
+            flow_loss_l2 = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, p=2, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
             
-
-
-            suc = suc1 and suc2 and suc3 and suc4
-
-
-        if self.visu_forward:
-            self._k += 1
-            self.counter_images_logged += 1
-            mask = (flow_mask == True)
-
-            self.visualizer.flow_to_gradient(tag = f'gt_flow_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
-                img = real_img[0].cpu().type(torch.float32), flow =  uv_gt[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
-                mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
-                store=True, jupyter=False, method='left')
-            self.visualizer.flow_to_gradient(tag = f'left_gt__right_pred_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
-                img = real_img[0].cpu().type(torch.float32), flow = flow[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
-                mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
-                store=True, jupyter=False, method='right')
-
-
-            self.visualizer.plot_translations(
-                tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
-                epoch = self.current_epoch,
-                img = real_img[0].cpu(),
-                flow = uv_gt.permute(0,2,3,1)[0].cpu(),
-                mask=mask[0].cpu(),
-                store=True,
-                method= 'left')
-            self.visualizer.plot_translations(
-                tag = f'Predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
-                epoch = self.current_epoch,
-                img = real_img[0].cpu(),
-                flow = flow[0, :2, :, :].permute(1, 2, 0).cpu(),
-                mask=mask[0].cpu(),
-                store=True,
-                method= 'right')
-
             
-            # self.visualizer.plot_segmentation(tag=f'_',
-            #                                     epoch=self.current_epoch,
-            #                                     label=flow_mask_ero[b].type(torch.bool).cpu(
-            #                                     ).numpy(),
-            #                                     store=True,
-            #                                     method='left')
-            
-            # self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
-            #                                     epoch=self.current_epoch,
-            #                                     label=valid_flow[b].type(torch.bool).cpu(
-            #                                     ).numpy(),
-            #                                     store=True,
-                                                # method='right')
+            if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
+                real_tl, real_br, ren_tl, ren_br = bb
 
-            seg_max = p_label.argmax(dim=1)
-            self.visualizer.plot_segmentation(tag=f'_',
-                                                epoch=self.current_epoch,
-                                                label=gt_label_cropped[b].cpu(
-                                                ).numpy(),
-                                                store=True,
-                                                method='left')
-            
-            self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
-                                                epoch=self.current_epoch,
-                                                label=seg_max[b].cpu(
-                                                ).numpy(),
-                                                store=True,
-                                                method='right')
+                b = 0
+                K_real = torch.tensor( [[cam[b,2],0,cam[b,0]],[b,cam[b,3],cam[b,1]],[0,0,1]], device=self.device )
+                
+                h_real_est = torch.eye(4,device=self.device)
+                h_real_est[:3,:3] = quat_to_rot(pred_rot_wxyz[b][None,:], conv='wxyz', device=self.device)
+                h_real_est[:3,3] = torch.tensor( pred_trans[b] ,device=self.device )
+                # Calculate gt_flow__gt_label 
+                gt_label_obj = (gt_label_cropped ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
+                flow_mask_in = flow_mask == True# BS,H,W
+                # Calculate pred_flow__flow_mask 
+                typ =  torch.float32
+                suc4,  h_pred_flow__gt_label = flow_to_trafo_PnP( 
+                    real_br = real_br[b], 
+                    real_tl = real_tl[b], 
+                    ren_br = ren_br[b], 
+                    ren_tl = ren_tl[b], 
+                    flow_mask = gt_label_obj[b], 
+                    u_map = flow[b, 0, :, :].type( typ ), 
+                    v_map = flow[b, 1, :, :].type( typ ), 
+                    K_ren = self.K_ren.type( typ ), 
+                    K_real = K_real.type( typ ), 
+                    render_d = render_d[b].type( typ ), 
+                    h_render = h_render[b].type( typ ),
+                    h_real_est = h_real_est.type( typ ))
+
+
+                suc1,  h_gt_flow__gt_label = flow_to_trafo_PnP( 
+                    real_br = real_br[b], 
+                    real_tl = real_tl[b], 
+                    ren_br = ren_br[b], 
+                    ren_tl = ren_tl[b], 
+                    flow_mask = gt_label_obj[b], 
+                    u_map = u_map[b].type( typ ), 
+                    v_map = v_map[b].type( typ ), 
+                    K_ren = self.K_ren.type( typ ), 
+                    K_real = K_real.type( typ ), 
+                    render_d = render_d[b].type( typ ), 
+                    h_render = h_render[b].type( typ ),
+                    h_real_est = h_real_est.type( typ ))
+                
+
+
+                
+                suc2,  h_pred_flow__flow_mask = flow_to_trafo_PnP( 
+                    real_br = real_br[b], 
+                    real_tl = real_tl[b], 
+                    ren_br = ren_br[b], 
+                    ren_tl = ren_tl[b], 
+                    flow_mask = flow_mask_in[b], 
+                    u_map = flow[b, 0, :, :].type( typ ), 
+                    v_map = flow[b, 1, :, :].type( typ ), 
+                    K_ren = self.K_ren.type( typ ), 
+                    K_real = K_real.type( typ ), 
+                    render_d = render_d[b].type( typ ), 
+                    h_render = h_render[b].type( typ ),
+                    h_real_est = h_real_est.type( typ ))
+
+                # Calculate pred_flow__pred_label
+                pred_seg_mask = ( p_label.argmax(dim=1) ==  unique_desig[1][:,None,None].repeat(1,480,640)   ) # BS,H,W
+                suc3, h_pred_flow__pred_label = flow_to_trafo_PnP( 
+                    real_br = real_br[b], 
+                    real_tl = real_tl[b], 
+                    ren_br = ren_br[b], 
+                    ren_tl = ren_tl[b], 
+                    flow_mask = pred_seg_mask[b], 
+                    u_map = flow[b, 0, :, :].type( typ ), 
+                    v_map = flow[b, 1, :, :].type( typ ), 
+                    K_ren = self.K_ren.type( typ ), 
+                    K_real = K_real.type( typ ), 
+                    render_d = render_d[b].type( typ ), 
+                    h_render = h_render[b].type( typ ),
+                    h_real_est = h_real_est.type( typ ))
+                
+
+
+                suc = suc1 and suc2 and suc3 and suc4
+            if self.visu_forward:
+                self._k += 1
+                self.counter_images_logged += 1
+                mask = (flow_mask == True)
+
+                self.visualizer.flow_to_gradient(tag = f'gt_flow_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
+                    img = real_img[0].cpu().type(torch.float32), flow =  uv_gt[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
+                    mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
+                    store=True, jupyter=False, method='left')
+                self.visualizer.flow_to_gradient(tag = f'left_gt__right_pred_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
+                    img = real_img[0].cpu().type(torch.float32), flow = flow[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
+                    mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
+                    store=True, jupyter=False, method='right')
+
+
+                self.visualizer.plot_translations(
+                    tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
+                    epoch = self.current_epoch,
+                    img = real_img[0].cpu(),
+                    flow = uv_gt.permute(0,2,3,1)[0].cpu(),
+                    mask=mask[0].cpu(),
+                    store=True,
+                    method= 'left')
+                self.visualizer.plot_translations(
+                    tag = f'Predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
+                    epoch = self.current_epoch,
+                    img = real_img[0].cpu(),
+                    flow = flow[0, :2, :, :].permute(1, 2, 0).cpu(),
+                    mask=mask[0].cpu(),
+                    store=True,
+                    method= 'right')
+
+                
+                # self.visualizer.plot_segmentation(tag=f'_',
+                #                                     epoch=self.current_epoch,
+                #                                     label=flow_mask_ero[b].type(torch.bool).cpu(
+                #                                     ).numpy(),
+                #                                     store=True,
+                #                                     method='left')
+                
+                # self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
+                #                                     epoch=self.current_epoch,
+                #                                     label=valid_flow[b].type(torch.bool).cpu(
+                #                                     ).numpy(),
+                #                                     store=True,
+                                                    # method='right')
+
+                seg_max = p_label.argmax(dim=1)
+                self.visualizer.plot_segmentation(tag=f'_',
+                                                    epoch=self.current_epoch,
+                                                    label=gt_label_cropped[b].cpu(
+                                                    ).numpy(),
+                                                    store=True,
+                                                    method='left')
+                
+                self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
+                                                    epoch=self.current_epoch,
+                                                    label=seg_max[b].cpu(
+                                                    ).numpy(),
+                                                    store=True,
+                                                    method='right')
+        
+                self.visualizer.plot_corrospondence(tag=f'_',
+                                                    epoch=self.current_epoch,
+                                                    u_map=u_map[b], 
+                                                    v_map=v_map[b], 
+                                                    flow_mask=flow_mask[b], 
+                                                    real_img=real_img[b], 
+                                                    render_img=render_img[b],
+                                                    store=True,
+                                                    method='left')
+                self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
+                                                    epoch=self.current_epoch,
+                                                    u_map= flow[b,0,:,:], 
+                                                    v_map= flow[b,1,:,:], 
+                                                    flow_mask=flow_mask[b], 
+                                                    real_img=real_img[b], 
+                                                    render_img=render_img[b],
+                                                    store=True,
+                                                    method='right')
+
+
+                self.visualizer.plot_estimated_pose(    tag = f"_",
+                                            epoch = self.current_epoch,
+                                            img= real_img_original[b].cpu().numpy(),
+                                            points = copy.deepcopy(model_points[b].cpu().numpy()),
+                                            store = True,
+                                            K = K_real.cpu().numpy(),
+                                            H = h_gt_flow__gt_label.cpu().numpy(),
+                                            method='left')
+                self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow__gt_label, right pred_flow__flow_mask)_{self._mode}_nr_{self.counter_images_logged}",
+                                            epoch = self.current_epoch,
+                                            img= real_img_original[b].cpu().numpy(),
+                                            points = copy.deepcopy(model_points[b].cpu().numpy()),
+                                            store = True,
+                                            K = K_real.cpu().numpy(),
+                                            H = h_pred_flow__flow_mask.detach().cpu().numpy(),
+                                            method='right')
+
     
-            self.visualizer.plot_corrospondence(tag=f'_',
-                                                epoch=self.current_epoch,
-                                                u_map=u_map[b], 
-                                                v_map=v_map[b], 
-                                                flow_mask=flow_mask[b], 
-                                                real_img=real_img[b], 
-                                                render_img=render_img[b],
-                                                store=True,
-                                                method='left')
-            self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
-                                                epoch=self.current_epoch,
-                                                u_map= flow[b,0,:,:], 
-                                                v_map= flow[b,1,:,:], 
-                                                flow_mask=flow_mask[b], 
-                                                real_img=real_img[b], 
-                                                render_img=render_img[b],
-                                                store=True,
-                                                method='right')
-
-
-            self.visualizer.plot_estimated_pose(    tag = f"_",
-                                        epoch = self.current_epoch,
-                                        img= real_img_original[b].cpu().numpy(),
-                                        points = copy.deepcopy(model_points[b].cpu().numpy()),
-                                        store = True,
-                                        K = K_real.cpu().numpy(),
-                                        H = h_gt_flow__gt_label.cpu().numpy(),
-                                        method='left')
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow__gt_label, right pred_flow__flow_mask)_{self._mode}_nr_{self.counter_images_logged}",
-                                        epoch = self.current_epoch,
-                                        img= real_img_original[b].cpu().numpy(),
-                                        points = copy.deepcopy(model_points[b].cpu().numpy()),
-                                        store = True,
-                                        K = K_real.cpu().numpy(),
-                                        H = h_pred_flow__flow_mask.detach().cpu().numpy(),
-                                        method='right')
-
- 
-            self.visualizer.plot_estimated_pose(    tag = f"_",
-                                        epoch = self.current_epoch,
-                                        img= real_img_original[b].cpu().numpy(),
-                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                        store = True,
-                                        K = K_real.cpu().numpy(),
-                                        H = h_gt_flow__gt_label.cpu().numpy(), 
-                                      method='left' )
-            self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_flow__gt_label, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
-                                        epoch = self.current_epoch,
-                                        img= real_img_original[b].cpu().numpy(),
-                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                        store = True,
-                                        K = K_real.cpu().numpy(),
-                                        H = h_pred_flow__pred_label.detach().cpu().numpy(),
-                                        method='right')
-            self.visualizer.plot_estimated_pose(    tag = f"_",
-                                        epoch = self.current_epoch,
-                                        img= real_img_original[b].cpu().numpy(),
-                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                        store = True,
-                                        K = K_real.cpu().numpy(),
-                                        H = h_real_est.cpu().numpy(), 
+                self.visualizer.plot_estimated_pose(    tag = f"_",
+                                            epoch = self.current_epoch,
+                                            img= real_img_original[b].cpu().numpy(),
+                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                            store = True,
+                                            K = K_real.cpu().numpy(),
+                                            H = h_gt_flow__gt_label.cpu().numpy(), 
                                         method='left' )
-            self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left Input Pose, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
-                                        epoch = self.current_epoch,
-                                        img= real_img_original[b].cpu().numpy(),
-                                        points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                        store = True,
-                                        K = K_real.cpu().numpy(),
-                                        H = h_pred_flow__pred_label.detach().cpu().numpy(),
-                                        method='right')
-        
-        if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
-            target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,model_points.shape[1],1)
-        
-
-            h_gt_flow__gt_label,h_pred_flow__flow_mask, h_pred_flow__pred_label, h_real_est, h_real
-
-            # Compute ADD-S
-            adds_h_gt_flow__gt_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_gt_flow__gt_label [None].type( target.dtype) )
-            adds_h_pred_flow__flow_mask  = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__flow_mask[None].type( target.dtype))
-            adds_h_pred_flow__pred_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__pred_label[None].type( target.dtype))
-            adds_h_pred_flow__gt_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__gt_label[None].type( target.dtype))
-            adds_init = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_est[None].type( target.dtype))
+                self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_flow__gt_label, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
+                                            epoch = self.current_epoch,
+                                            img= real_img_original[b].cpu().numpy(),
+                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                            store = True,
+                                            K = K_real.cpu().numpy(),
+                                            H = h_pred_flow__pred_label.detach().cpu().numpy(),
+                                            method='right')
+                self.visualizer.plot_estimated_pose(    tag = f"_",
+                                            epoch = self.current_epoch,
+                                            img= real_img_original[b].cpu().numpy(),
+                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                            store = True,
+                                            K = K_real.cpu().numpy(),
+                                            H = h_real_est.cpu().numpy(), 
+                                            method='left' )
+                self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left Input Pose, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
+                                            epoch = self.current_epoch,
+                                            img= real_img_original[b].cpu().numpy(),
+                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                            store = True,
+                                            K = K_real.cpu().numpy(),
+                                            H = h_pred_flow__pred_label.detach().cpu().numpy(),
+                                            method='right')
             
+            if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
+                target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,model_points.shape[1],1)
 
-            # adds_gt = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real[0][None])
-            # log scalars            
-            log_scalars[f'adds_init'] = float(adds_init.detach())
-            log_scalars[f'adds_gt_flow__gt_label'] = float(adds_h_gt_flow__gt_label.detach())
-            log_scalars[f'adds_pred_flow__gt_label'] = float(adds_h_pred_flow__gt_label.detach())
-            log_scalars[f'adds_pred_flow__flow_mask'] = float(adds_h_pred_flow__flow_mask.detach())
-            log_scalars[f'adds_pred_flow__pred_label'] = float(adds_h_pred_flow__pred_label.detach())
+
+                # Compute ADD-S
+                adds_h_gt_flow__gt_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_gt_flow__gt_label [None].type( target.dtype) )
+                adds_h_pred_flow__flow_mask  = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__flow_mask[None].type( target.dtype))
+                adds_h_pred_flow__pred_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__pred_label[None].type( target.dtype))
+                adds_h_pred_flow__gt_label = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_pred_flow__gt_label[None].type( target.dtype))
+                adds_init = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real_est[None].type( target.dtype))
+                
+                # adds_gt = self.criterion_adds(target[b][None], model_points[b][None], idx[b][None], H = h_real[0][None])
+                # log scalars            
+                log_scalars[f'adds_init'] = float(adds_init.detach())
+                log_scalars[f'adds_gt_flow__gt_label'] = float(adds_h_gt_flow__gt_label.detach())
+                log_scalars[f'adds_pred_flow__gt_label'] = float(adds_h_pred_flow__gt_label.detach())
+                log_scalars[f'adds_pred_flow__flow_mask'] = float(adds_h_pred_flow__flow_mask.detach())
+                log_scalars[f'adds_pred_flow__pred_label'] = float(adds_h_pred_flow__pred_label.detach())
+                v1 = round(log_scalars['adds_init'],4)
+                v2 = round(log_scalars[f'adds_gt_flow__gt_label'],4)
+                v3 = round(log_scalars[f'adds_pred_flow__gt_label'],4)
+                v4 = round(float(flow_loss_l2[0].detach()),2 )
+                print(f'LOS after iteration {iteration} | Init: {v1}, gt: {v2}, pred: {v3}, L_flow_l2: {v4}')
+            
         if self._mode == 'test':
             if not suc:
                 try:
@@ -498,13 +542,16 @@ class TrackNet6D(LightningModule):
 
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
-        loss = w_s * focal_loss + w_f * flow_loss  #dis + w_t * translation_loss
+        w_f_l1 = self.exp.get('loss', {}).get('weight_flow_l1', 0.5)
+        loss = w_s * focal_loss + w_f * flow_loss_l2 + w_f_l1 * flow_loss_l1 #dis + w_t * translation_loss
         
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())
-        log_scalars[f'loss_flow'] = float(torch.mean(flow_loss, dim=0).detach())
-        fl = log_scalars[f'loss_flow']
+        log_scalars[f'loss_flow'] = float(torch.mean(flow_loss_l2, dim=0).detach())
+        log_scalars[f'loss_flow_l1'] = float(torch.mean(flow_loss_l1, dim=0).detach())
+        
 
+        fl = log_scalars[f'loss_flow']
 
         return loss, log_scalars, suc
     def on_epoch_start(self):
