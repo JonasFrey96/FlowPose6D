@@ -132,7 +132,7 @@ class TrackNet6D(LightningModule):
         if exp.get( 'flownet', False):
             from model import FlownetDisparity 
             self.pixelwise_refiner = FlownetDisparity.from_weights(
-                22, '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar')
+                22, env.get('p_weights_flownet','/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar'))
 
         # df stands for DenseFusion
         if exp.get('model', {}).get('df_refine', False):

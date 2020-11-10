@@ -128,13 +128,13 @@ class EfficientDisparity(nn.Module):
     return flow, segmentation
 
 if  __name__ == "__main__":
-  model = EfficientDisparity(num_classes = 22, backbone= 'efficientnet-b4', connections_encoder_decoder = 2, depth_backbone = True)
-  BS = 2
-  H = 480
-  W = 640
-  C = 8
-
-  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-  data = torch.ones( (BS,C,H,W), device=device )
-  model = model.to(device)
-  out = model(data, idx =None)
+  for i in range(0,7):
+    model = EfficientDisparity(num_classes = 22, backbone= f'efficientnet-b{i}', connections_encoder_decoder = 2, depth_backbone = True)
+    BS = 2
+    H = 480
+    W = 640
+    C = 8
+    #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    #data = torch.ones( (BS,C,H,W), device=device )
+    #model = model.to(device)
+    #out = model(data, idx =None)

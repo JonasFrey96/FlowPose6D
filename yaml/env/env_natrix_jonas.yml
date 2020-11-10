@@ -16,3 +16,4 @@ p_ycb_lookup_desig_to_obj: "/home/jonfrey/PLR2/datasets/ycb/dataset_config/desig
 p_ycb_config: "/home/jonfrey/datasets/config"
 p_background: "/media/scratch1/jonfrey/datasets/Indoor_Scene/Images"
 p_config: "/media/scratch1/jonfrey/datasets/config/"
+p_weights_flownet: '/media/scratch1/jonfrey/models/pretrained_flownet/FlowNetModels/pytorch/flownets_from_caffe.pth.tar'
