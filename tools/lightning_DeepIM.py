@@ -618,7 +618,9 @@ class TrackNet6D(LightningModule):
         # aggregate statistics per object (ADD-S sym and ADD non sym)
         loss = torch.mean(dis)
         if not suc:
-            return {f'{self._mode}_loss': loss}
+            tensorboard_logs = {f'{self._mode}_disparity': float(loss)}
+
+            return {f'{self._mode}_loss': loss, 'log': tensorboard_logs}
         try:
             self._dict_track[f'{self._mode}_disparity  [+inf - 0]'].append(float(loss))
         except:
