@@ -369,134 +369,137 @@ class TrackNet6D(LightningModule):
                 self._k += 1
                 self.counter_images_logged += 1
                 mask = (flow_mask == True)
+                try:
+                    self.visualizer.flow_to_gradient(tag = f'gt_flow_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
+                        img = real_img[0].cpu().type(torch.float32), flow =  uv_gt[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
+                        mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
+                        store=True, jupyter=False, method='left')
+                    self.visualizer.flow_to_gradient(tag = f'left_gt__right_pred_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
+                        img = real_img[0].cpu().type(torch.float32), flow = flow[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
+                        mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
+                        store=True, jupyter=False, method='right')
 
-                self.visualizer.flow_to_gradient(tag = f'gt_flow_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
-                    img = real_img[0].cpu().type(torch.float32), flow =  uv_gt[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
-                    mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
-                    store=True, jupyter=False, method='left')
-                self.visualizer.flow_to_gradient(tag = f'left_gt__right_pred_{self._mode}_nr_{self.counter_images_logged}', epoch= self.current_epoch,
-                    img = real_img[0].cpu().type(torch.float32), flow = flow[0, :2, :, :].permute(1, 2, 0).cpu().type(torch.float32), 
-                    mask = (gt_label_cropped[0] == idx[0]+1).cpu().type(torch.float32), #,tl=real_tl[0], br=real_br[0],
-                    store=True, jupyter=False, method='right')
+
+                    self.visualizer.plot_translations(
+                        tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
+                        epoch = self.current_epoch,
+                        img = real_img[0].cpu(),
+                        flow = uv_gt.permute(0,2,3,1)[0].cpu(),
+                        mask=mask[0].cpu(),
+                        store=True,
+                        method= 'left')
+                    self.visualizer.plot_translations(
+                        tag = f'Predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
+                        epoch = self.current_epoch,
+                        img = real_img[0].cpu(),
+                        flow = flow[0, :2, :, :].permute(1, 2, 0).cpu(),
+                        mask=mask[0].cpu(),
+                        store=True,
+                        method= 'right')
+
+                    
+                    # self.visualizer.plot_segmentation(tag=f'_',
+                    #                                     epoch=self.current_epoch,
+                    #                                     label=flow_mask_ero[b].type(torch.bool).cpu(
+                    #                                     ).numpy(),
+                    #                                     store=True,
+                    #                                     method='left')
+                    
+                    # self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
+                    #                                     epoch=self.current_epoch,
+                    #                                     label=valid_flow[b].type(torch.bool).cpu(
+                    #                                     ).numpy(),
+                    #                                     store=True,
+                                                        # method='right')
+
+                    seg_max = p_label.argmax(dim=1)
+                    self.visualizer.plot_segmentation(tag=f'_',
+                                                        epoch=self.current_epoch,
+                                                        label=gt_label_cropped[b].cpu(
+                                                        ).numpy(),
+                                                        store=True,
+                                                        method='left')
+                    
+                    self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
+                                                        epoch=self.current_epoch,
+                                                        label=seg_max[b].cpu(
+                                                        ).numpy(),
+                                                        store=True,
+                                                        method='right')
+            
+                    self.visualizer.plot_corrospondence(tag=f'_',
+                                                        epoch=self.current_epoch,
+                                                        u_map=u_map[b], 
+                                                        v_map=v_map[b], 
+                                                        flow_mask=flow_mask[b], 
+                                                        real_img=real_img[b], 
+                                                        render_img=render_img[b],
+                                                        store=True,
+                                                        method='left')
+                    self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
+                                                        epoch=self.current_epoch,
+                                                        u_map= flow[b,0,:,:], 
+                                                        v_map= flow[b,1,:,:], 
+                                                        flow_mask=flow_mask[b], 
+                                                        real_img=real_img[b], 
+                                                        render_img=render_img[b],
+                                                        store=True,
+                                                        method='right')
 
 
-                self.visualizer.plot_translations(
-                    tag = f'gt_votes_{self._mode}_nr_{self.counter_images_logged}',
-                    epoch = self.current_epoch,
-                    img = real_img[0].cpu(),
-                    flow = uv_gt.permute(0,2,3,1)[0].cpu(),
-                    mask=mask[0].cpu(),
-                    store=True,
-                    method= 'left')
-                self.visualizer.plot_translations(
-                    tag = f'Predicted_votes_{self._mode}_nr_{self.counter_images_logged}',
-                    epoch = self.current_epoch,
-                    img = real_img[0].cpu(),
-                    flow = flow[0, :2, :, :].permute(1, 2, 0).cpu(),
-                    mask=mask[0].cpu(),
-                    store=True,
-                    method= 'right')
+                    self.visualizer.plot_estimated_pose(    tag = f"_",
+                                                epoch = self.current_epoch,
+                                                img= real_img_original[b].cpu().numpy(),
+                                                points = copy.deepcopy(model_points[b].cpu().numpy()),
+                                                store = True,
+                                                K = K_real.cpu().numpy(),
+                                                H = h_gt_flow__gt_label.cpu().numpy(),
+                                                method='left')
+                    self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow__gt_label, right pred_flow__flow_mask)_{self._mode}_nr_{self.counter_images_logged}",
+                                                epoch = self.current_epoch,
+                                                img= real_img_original[b].cpu().numpy(),
+                                                points = copy.deepcopy(model_points[b].cpu().numpy()),
+                                                store = True,
+                                                K = K_real.cpu().numpy(),
+                                                H = h_pred_flow__flow_mask.detach().cpu().numpy(),
+                                                method='right')
 
-                
-                # self.visualizer.plot_segmentation(tag=f'_',
-                #                                     epoch=self.current_epoch,
-                #                                     label=flow_mask_ero[b].type(torch.bool).cpu(
-                #                                     ).numpy(),
-                #                                     store=True,
-                #                                     method='left')
-                
-                # self.visualizer.plot_segmentation(tag=f'Valid Flow_(gt flow eroded , right predicted label eroded)_{self._mode}_nr_{self.counter_images_logged}',
-                #                                     epoch=self.current_epoch,
-                #                                     label=valid_flow[b].type(torch.bool).cpu(
-                #                                     ).numpy(),
-                #                                     store=True,
-                                                    # method='right')
-
-                seg_max = p_label.argmax(dim=1)
-                self.visualizer.plot_segmentation(tag=f'_',
-                                                    epoch=self.current_epoch,
-                                                    label=gt_label_cropped[b].cpu(
-                                                    ).numpy(),
-                                                    store=True,
-                                                    method='left')
-                
-                self.visualizer.plot_segmentation(tag=f'Segmentation_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
-                                                    epoch=self.current_epoch,
-                                                    label=seg_max[b].cpu(
-                                                    ).numpy(),
-                                                    store=True,
-                                                    method='right')
         
-                self.visualizer.plot_corrospondence(tag=f'_',
-                                                    epoch=self.current_epoch,
-                                                    u_map=u_map[b], 
-                                                    v_map=v_map[b], 
-                                                    flow_mask=flow_mask[b], 
-                                                    real_img=real_img[b], 
-                                                    render_img=render_img[b],
-                                                    store=True,
-                                                    method='left')
-                self.visualizer.plot_corrospondence(tag=f'Flow_(left gt , right predicted)_{self._mode}_nr_{self.counter_images_logged}',
-                                                    epoch=self.current_epoch,
-                                                    u_map= flow[b,0,:,:], 
-                                                    v_map= flow[b,1,:,:], 
-                                                    flow_mask=flow_mask[b], 
-                                                    real_img=real_img[b], 
-                                                    render_img=render_img[b],
-                                                    store=True,
-                                                    method='right')
-
-
-                self.visualizer.plot_estimated_pose(    tag = f"_",
-                                            epoch = self.current_epoch,
-                                            img= real_img_original[b].cpu().numpy(),
-                                            points = copy.deepcopy(model_points[b].cpu().numpy()),
-                                            store = True,
-                                            K = K_real.cpu().numpy(),
-                                            H = h_gt_flow__gt_label.cpu().numpy(),
-                                            method='left')
-                self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left gt_flow__gt_label, right pred_flow__flow_mask)_{self._mode}_nr_{self.counter_images_logged}",
-                                            epoch = self.current_epoch,
-                                            img= real_img_original[b].cpu().numpy(),
-                                            points = copy.deepcopy(model_points[b].cpu().numpy()),
-                                            store = True,
-                                            K = K_real.cpu().numpy(),
-                                            H = h_pred_flow__flow_mask.detach().cpu().numpy(),
-                                            method='right')
-
-    
-                self.visualizer.plot_estimated_pose(    tag = f"_",
-                                            epoch = self.current_epoch,
-                                            img= real_img_original[b].cpu().numpy(),
-                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                            store = True,
-                                            K = K_real.cpu().numpy(),
-                                            H = h_gt_flow__gt_label.cpu().numpy(), 
-                                        method='left' )
-                self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_flow__gt_label, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
-                                            epoch = self.current_epoch,
-                                            img= real_img_original[b].cpu().numpy(),
-                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                            store = True,
-                                            K = K_real.cpu().numpy(),
-                                            H = h_pred_flow__pred_label.detach().cpu().numpy(),
-                                            method='right')
-                self.visualizer.plot_estimated_pose(    tag = f"_",
-                                            epoch = self.current_epoch,
-                                            img= real_img_original[b].cpu().numpy(),
-                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                            store = True,
-                                            K = K_real.cpu().numpy(),
-                                            H = h_real_est.cpu().numpy(), 
+                    self.visualizer.plot_estimated_pose(    tag = f"_",
+                                                epoch = self.current_epoch,
+                                                img= real_img_original[b].cpu().numpy(),
+                                                points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                                store = True,
+                                                K = K_real.cpu().numpy(),
+                                                H = h_gt_flow__gt_label.cpu().numpy(), 
                                             method='left' )
-                self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left Input Pose, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
-                                            epoch = self.current_epoch,
-                                            img= real_img_original[b].cpu().numpy(),
-                                            points =copy.deepcopy(model_points[b].cpu().numpy()),
-                                            store = True,
-                                            K = K_real.cpu().numpy(),
-                                            H = h_pred_flow__pred_label.detach().cpu().numpy(),
-                                            method='right')
+                    self.visualizer.plot_estimated_pose( tag = f"Pose_estimate_(left gt_flow__gt_label, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
+                                                epoch = self.current_epoch,
+                                                img= real_img_original[b].cpu().numpy(),
+                                                points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                                store = True,
+                                                K = K_real.cpu().numpy(),
+                                                H = h_pred_flow__pred_label.detach().cpu().numpy(),
+                                                method='right')
+                    self.visualizer.plot_estimated_pose(    tag = f"_",
+                                                epoch = self.current_epoch,
+                                                img= real_img_original[b].cpu().numpy(),
+                                                points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                                store = True,
+                                                K = K_real.cpu().numpy(),
+                                                H = h_real_est.cpu().numpy(), 
+                                                method='left' )
+                    self.visualizer.plot_estimated_pose(    tag = f"Pose_estimate_(left Input Pose, right h_pred_flow__pred_label)_{self._mode}_nr_{self.counter_images_logged}",
+                                                epoch = self.current_epoch,
+                                                img= real_img_original[b].cpu().numpy(),
+                                                points =copy.deepcopy(model_points[b].cpu().numpy()),
+                                                store = True,
+                                                K = K_real.cpu().numpy(),
+                                                H = h_pred_flow__pred_label.detach().cpu().numpy(),
+                                                method='right')
+                except:
+                    logging.warning('Failed Visualization in Forward pass')
+                    
             
             if self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
                 target = torch.bmm( model_points, torch.transpose(h_real[:,:3,:3], 1,2 ) ) + h_real[:,:3,3][:,None,:].repeat(1,model_points.shape[1],1)

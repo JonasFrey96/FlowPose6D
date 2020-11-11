@@ -389,8 +389,8 @@ Vertical, pos down | neg up:
             p_x = points[i, 0]
             p_y = points[i, 1]
             p_z = points[i, 2]
-            u = int(((p_x / p_z) * cam_fx) + cam_cx)
-            v = int(((p_y / p_z) * cam_fy) + cam_cy)
+            u = int(((p_x / np.clip(p_z, a_min= 0.0001, a_max=None)) * cam_fx) + cam_cx)
+            v = int(((p_y / np.clip(p_z, a_min= 0.0001,a_max=None)) * cam_fy) + cam_cy)
             try:
                 img_d[v - w:v + w + 1, u - w:u + w + 1, 0] = 0
                 img_d[v - w:v + w + 1, u - w:u + w + 1, 1] = 255

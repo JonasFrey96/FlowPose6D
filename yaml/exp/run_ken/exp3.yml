@@ -1,4 +1,4 @@
-model_path: /models/runs/efficient_disparity_scaled_24/b6_no_skip_no_depth
+model_path: best/folder/ever/models/runs/efficient_disparity_scaled_24/b6_no_skip_no_depth
 checkpoint_restore: false
 checkpoint_load: 'false'
 mail: false
