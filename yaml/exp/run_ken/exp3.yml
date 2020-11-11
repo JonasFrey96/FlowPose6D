@@ -1,4 +1,4 @@
-model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b6_no_skip_no_depth
+model_path: /models/runs/efficient_disparity_scaled_24/b6_no_skip_no_depth
 checkpoint_restore: false
 checkpoint_load: 'false'
 mail: false
@@ -33,7 +33,7 @@ loss:
   weight_pose: 0
   weight_trans: 0
 epochs: 500
-lr: 5.0e-05
+lr: 1.0e-05
 lr_cfg:
   on_plateau_cfg:
     mode: min

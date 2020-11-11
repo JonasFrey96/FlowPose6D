@@ -1,6 +1,6 @@
-model_path: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/L1_loss_refine/_" #overfit_1_batch_bs_1
+model_path: "/media/scratch1/jonfrey/models/runs/efficient_disparity_natrix/L1_loss_and_fix_upper_layers/_" #overfit_1_batch_bs_1
 flownet: False
-checkpoint_restore: true
+checkpoint_restore: false
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/2020-11-08T00:36:57_b4_res2_loss_5to1_lr5-4_no_depth_no_skip_24h/epoch=96-avg_val_disparity_float=15.5202.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
 model_mode: fit #fit #test
@@ -30,10 +30,14 @@ efficient_disp_cfg:
   backbone: efficientnet-b4
   connections_encoder_decoder: 0
   depth_backbone: false
+  seperate_flow_head: true
 
 refine_cfg:
   iterations: 1
   feedback: pred_flow_gt_label
+
+training_params_limit: True
+
 
 loss:
   weight_semantic_segmentation: 5
@@ -43,7 +47,7 @@ loss:
   weight_trans: 1
 
 epochs: 500
-lr: 1.0e-4
+lr: 1.0e-5
 lr_cfg:
   on_plateau_cfg:
     mode: "min"

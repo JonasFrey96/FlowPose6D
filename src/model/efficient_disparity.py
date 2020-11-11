@@ -12,12 +12,13 @@ def deconv(in_planes, out_planes):
     )
 
 class EfficientDisparity(nn.Module):
-  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2, depth_backbone = False):
+  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2, depth_backbone = False, seperate_flow_head= False):
     # tested with b6
     super().__init__()
     self.connections_encoder_decoder = connections_encoder_decoder
     self.feature_extractor = EfficientNet.from_pretrained(backbone)
     self.size = self.feature_extractor.get_image_size( backbone ) 
+    self.seperate_flow_head = seperate_flow_head
     idxs, feats, res = self.feature_extractor.layer_info( torch.ones( (4,3,self.size, self.size)))
     
     self.depth_backbone = depth_backbone
@@ -49,7 +50,10 @@ class EfficientDisparity(nn.Module):
         dc.append( deconv(self.feature_sizes[- (i+1) ] , self.feature_sizes[-(i+2)] ) )
     self.deconvs = nn.ModuleList(dc)
 
-    self.pred_head_flow = deconv(self.feature_sizes[0], 2)
+    if seperate_flow_head == True:
+      self.pred_head_flow = deconv(self.feature_sizes[0], 2*(num_classes-1))
+    else:
+      self.pred_head_flow = deconv(self.feature_sizes[0], 2)
     self.pred_head_label = deconv(self.feature_sizes[0], self._num_classes)
 
     self.up_in = torch.nn.UpsamplingBilinear2d(size=(self.size, self.size))
@@ -67,7 +71,7 @@ class EfficientDisparity(nn.Module):
 
     Args:
         data ([torch.tensor]): BS,C,H,W (C=6) if self.depth_backbone: C = 8 else: C = 6 
-        idx ([torch.tensor]): BS,1
+        idx ([torch.tensor]): BS,1 starting for first object with 0 endind with num_classes-1
         label ([type], optional): [description]. Defaults to None.
 
     Returns:
@@ -116,7 +120,15 @@ class EfficientDisparity(nn.Module):
       
     # no residual for last layer. Here maybe convert to gray scale and add residual. Not sure if this would be a good idea of if this has been proofen to work before
     dim = real.shape[3]
-    flow = self.pred_head_flow( out_deconv )[:,:,:dim,:dim]
+    
+    if self.seperate_flow_head:
+      flow_all = self.pred_head_flow( out_deconv )[:,:,:dim,:dim]
+      flow = torch.zeros( flow_all[:,:2,:,:].shape, dtype= flow_all.dtype, device= flow_all.device)
+      for b in range(BS):
+        flow[b,:,:,:] = flow_all[b,int(idx[b,0])*2:int(idx[b,0])*2+2,:,:]
+
+    else:
+      flow = self.pred_head_flow( out_deconv )[:,:,:dim,:dim]
     segmentation = self.pred_head_label( out_deconv )[:,:,:dim,:dim]
 
     flow = self.up_out(flow)
@@ -128,13 +140,16 @@ class EfficientDisparity(nn.Module):
     return flow, segmentation
 
 if  __name__ == "__main__":
+  # model = EfficientDisparity(num_classes = 22, backbone= f'efficientnet-b4', connections_encoder_decoder = 2, depth_backbone = False, seperate_flow_head= True )
+  # BS = 4
+  # H = 480
+  # W = 640
+  # C = 6
+  # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+  # data = torch.ones( (BS,C,H,W), device=device )
+  # model = model.to(device)
+  # idx = torch.linspace(0,BS-1,BS)[:,None]
+  # out = model(data, idx = idx)
   for i in range(0,7):
     model = EfficientDisparity(num_classes = 22, backbone= f'efficientnet-b{i}', connections_encoder_decoder = 2, depth_backbone = True)
-    BS = 2
-    H = 480
-    W = 640
-    C = 8
-    #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    #data = torch.ones( (BS,C,H,W), device=device )
-    #model = model.to(device)
-    #out = model(data, idx =None)
+  

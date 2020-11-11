@@ -24,6 +24,7 @@ Downloading the EfficientNet pertrained weights:
 Dont start a bjobs !!!
 ```
 conda activate track3 
+pip install opencv-python 
 cd ~/PLR3 && python src/model/efficient_disparity.py
 ```
 

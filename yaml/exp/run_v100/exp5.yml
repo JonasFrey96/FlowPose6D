@@ -1,4 +1,4 @@
-model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_scaled_24/b6_depth_no_skip_l1
+model_path: /models/runs/efficient_disparity_scaled_24/b6_depth_no_skip_l1
 checkpoint_restore: false
 checkpoint_load: 'false'
 mail: false

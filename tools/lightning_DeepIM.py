@@ -330,9 +330,7 @@ class TrackNet6D(LightningModule):
                     render_d = render_d[b].type( typ ), 
                     h_render = h_render[b].type( typ ),
                     h_real_est = h_real_est.type( typ ))
-                
-
-
+            
                 
                 suc2,  h_pred_flow__flow_mask = flow_to_trafo_PnP( 
                     real_br = real_br[b], 
@@ -557,6 +555,13 @@ class TrackNet6D(LightningModule):
     def on_epoch_start(self):
         self.counter_images_logged = 0
         self._mode = 'train'
+
+        if self.exp.get( 'training_params_limit', False):
+            for j, block in enumerate(self.pixelwise_refiner.feature_extractor._blocks):
+                for b in block.parameters():
+                    if j < 15:
+                        b.requires_grad = False
+            
 
     def training_step(self, batch, batch_idx):
         st = time.time()
