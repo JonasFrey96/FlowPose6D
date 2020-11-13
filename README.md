@@ -63,7 +63,12 @@ Replace the exp file. In the exp file put the visu log_to_file = False so the ne
 ```
 cd ~/PLR3 && python tools/lightning_DeepIM.py --env=yaml/env/env_leonhard_jonas.yml --exp=yaml/exp/t4h/exp1.yml
 ```
-
+### Tensorboard:
+sometimes this fixes the bug tmpdir bug
+```
+export TMPDIR=/cluster/home/jonfrey/tmpdir/
+tensorboard --logdir=./ --host=0.0.0.0
+```
 
 ### General
 
