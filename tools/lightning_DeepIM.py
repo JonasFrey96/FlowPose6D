@@ -11,7 +11,7 @@ import argparse
 import logging
 import signal
 import pickle
-
+import math
 
 # misc
 import numpy as np
@@ -20,6 +20,7 @@ import random
 import sklearn
 from scipy.spatial.transform import Rotation as R
 from math import pi
+from math import ceil
 import coloredlogs
 import datetime
 
@@ -189,6 +190,20 @@ class TrackNet6D(LightningModule):
         self.df_failed = pd.DataFrame(columns= ['ID'])
         self.df = pd.DataFrame(columns= self.adds_mets )
 
+        
+
+        input_res_h, input_res_w = self.pixelwise_refiner.size, self.pixelwise_refiner.size
+        flow_layers = 4
+        ups = []
+        nns = []
+        for i in range(0,len( self.pixelwise_refiner.feature_sizes) ):
+            print( ceil( input_res_h/(2**i)  )   )
+            ups.append( torch.nn.UpsamplingBilinear2d(size=( ceil( input_res_h/(2**i)  ) ,ceil( input_res_w/(2**i)  )) ) )
+            nns.append( torch.nn.UpsamplingNearest2d(size=( ceil( input_res_h/(2**i)  ) ,ceil( input_res_w/(2**i)  )) )  )
+        self.ups = torch.nn.ModuleList(ups)
+        self.nns = torch.nn.ModuleList(nns)
+        self.coefficents = [0.0005,0.001,0.005,0.01,0.02,0.08,1]
+
 
     def forward(self, batch):
         suc = True
@@ -269,6 +284,7 @@ class TrackNet6D(LightningModule):
 
             data = torch.cat([real_img, render_img], dim=3) # BS,H,W,C
             data = data.permute(0,3,1,2) # BS,C,H,W
+            
 
             if self.exp['efficient_disp_cfg'].get('depth_backbone'):
                 data_with_depth = data = torch.cat([data, real_d[:,None,:,:], render_d[:,None,:,:]], dim=1) 
@@ -283,10 +299,26 @@ class TrackNet6D(LightningModule):
 
             ind = (flow_mask == True )[:,None,:,:].repeat(1,2,1,1)
             uv_gt = torch.stack( [u_map, v_map], dim=3 ).permute(0,3,1,2)
+        
+            flow_loss_l1_stack = []
+            flow_loss_l2_stack = []
+            def l1(f,gt,ind):
+                return torch.sum(  torch.pow( torch.norm ( f[:,:2,:,:] * ind  - gt * ind, dim=1, p=1 ) + 0.0001 , 0.9) , dim=(1,2))   / torch.sum( ind[:,0,:,:], (1,2))
+            def l2(f,gt,ind):
+                return  torch.sum( torch.norm( f[:,:2,:,:] * ind  - gt * ind, p=2, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
+            for j, f in enumerate(flow) :
+                if j == len(flow)-1:
+                    # original size
+                    ind_ = ind
+                    gt = uv_gt
+                else:
+                    # scaled
+                    ind_ = self.nns[-(j+1)]( ind.type(torch.float32) ) == 1 
+                    gt = self.ups[-(j+1)]( uv_gt )
+                flow_loss_l1_stack.append( l1( f, gt, ind_) )
+                flow_loss_l2_stack.append( l2(f, gt, ind_) )
 
-            flow_loss_l1 = torch.sum(  torch.pow( torch.norm ( flow[:,:2,:,:] * ind  - uv_gt * ind, dim=1, p=1 ) + 0.0001 , 0.9) , dim=(1,2))   / torch.sum( ind[:,0,:,:], (1,2))
-            flow_loss_l2 = torch.sum( torch.norm( flow[:,:2,:,:] * ind  - uv_gt * ind, p=2, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
-            
+            flow = flow[-1]
             
             if self.visu_forward or self.exp.get('visu', {}).get('always_calculate', False) or (self._mode == 'val' and self.exp.get('visu', {}).get('full_val', False) ) or self._mode == 'test': 
                 real_tl, real_br, ren_tl, ren_br = bb
@@ -544,12 +576,19 @@ class TrackNet6D(LightningModule):
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
         w_f_l1 = self.exp.get('loss', {}).get('weight_flow_l1', 0.5)
-        loss = w_s * focal_loss + w_f * flow_loss_l2 + w_f_l1 * flow_loss_l1 #dis + w_t * translation_loss
+        
+        l2_sum = flow_loss_l2_stack[0]
+        l1_sum = flow_loss_l1_stack[0]
+        for i in range(1, len( flow_loss_l2_stack)):
+            l2_sum += flow_loss_l2_stack[i]*self.coefficents[i]
+            l1_sum += flow_loss_l1_stack[i]*self.coefficents[i]
+
+        loss = w_s * focal_loss + w_f * l2_sum + w_f_l1 * l1_sum #dis + w_t * translation_loss
         
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())
-        log_scalars[f'loss_flow'] = float(torch.mean(flow_loss_l2, dim=0).detach())
-        log_scalars[f'loss_flow_l1'] = float(torch.mean(flow_loss_l1, dim=0).detach())
+        log_scalars[f'loss_flow'] = float(torch.mean(flow_loss_l2_stack[-1], dim=0).detach())
+        log_scalars[f'loss_flow_l1'] = float(torch.mean(flow_loss_l1_stack[-1], dim=0).detach())
         
 
         fl = log_scalars[f'loss_flow']
@@ -735,7 +774,7 @@ class TrackNet6D(LightningModule):
         tensorboard_logs = {**tensorboard_logs, **log_scalars}
         pb = {'L_Seg': log_scalars['loss_segmentation'], 'L_Flow': log_scalars['loss_flow'], 'ADD_S': log_scalars['adds_pred_flow__gt_label'] }
         
-        return {f'{self._mode}_loss': loss, 'log': tensorboard_logs, 'progress_bar': pb }
+        return {'test_loss': loss, 'log': tensorboard_logs, 'progress_bar': pb }
    
 
     def visu_step(self, nr, batch, pred_r, pred_t, batch_idx):
@@ -1026,7 +1065,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp', type=file_path, default='yaml/exp/exp_ws_deepim_debug_natrix.yml',  # required=True,
+    parser.add_argument('--exp', type=file_path, default='/home/jonfrey/PLR3/yaml/exp/exp_ws_deepim_debug_natrix.yml',  # required=True,
                         help='The main experiment yaml file.')
     parser.add_argument('--env', type=file_path, default='yaml/env/env_natrix_jonas.yml',
                         help='The environment yaml file.')

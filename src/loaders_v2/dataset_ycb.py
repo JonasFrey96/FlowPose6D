@@ -542,9 +542,9 @@ class YCB(Backend):
         
 
         u_cropped = b.crop( torch.from_numpy( flow[0][:,:,None] ).type(
-            torch.float32), scale=True, mode="nearest").numpy()
+            torch.float32), scale=True, mode="bilinear").numpy()
         v_cropped = b.crop(  torch.from_numpy( flow[1][:,:,None]).type(
-            torch.float32), scale=True, mode="nearest").numpy()
+            torch.float32), scale=True, mode="bilinear").numpy()
         valid_flow_mask_cropped = b.crop(  torch.from_numpy( flow[2][:,:,None]).type(
             torch.float32), scale=True, mode="nearest").type(torch.bool).numpy()
        

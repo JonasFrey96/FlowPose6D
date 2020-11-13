@@ -11,17 +11,33 @@ def deconv(in_planes, out_planes):
         nn.LeakyReLU(0.1, inplace=True)
     )
 
+def predict_flow(in_planes):
+    return nn.Conv2d(in_planes, 2, kernel_size=3, stride=1, padding=1, bias=False)
+
+def cat(x, y):
+  if x == None: 
+    return y
+  else: 
+    return torch.cat( [x,y], dim= 1)
 class EfficientDisparity(nn.Module):
-  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1', connections_encoder_decoder = 2, depth_backbone = False, seperate_flow_head= False):
+  def __init__(self, num_classes = 22, backbone= 'efficientnet-b1', seperate_flow_head= False, pred_flow_pyramid=True, pred_flow_pyramid_add=True, ced_real=1, ced_render=1, ced_render_d=1,ced_real_d=1):
     # tested with b6
     super().__init__()
-    self.connections_encoder_decoder = connections_encoder_decoder
     self.feature_extractor = EfficientNet.from_pretrained(backbone)
     self.size = self.feature_extractor.get_image_size( backbone ) 
     self.seperate_flow_head = seperate_flow_head
+    self.ced_real = ced_real
+    self.ced_render = ced_render
+    self.ced_real_d = ced_real_d
+    self.ced_render_d = ced_render_d
+    self.pred_flow_pyramid_add = pred_flow_pyramid_add
+    self.pred_flow_pyramid = pred_flow_pyramid
     idxs, feats, res = self.feature_extractor.layer_info( torch.ones( (4,3,self.size, self.size)))
-    
-    self.depth_backbone = depth_backbone
+    if ced_render_d > 0 or ced_real_d > 0:
+      self.depth_backbone = True
+    else: 
+      self.depth_backbone = False
+
     if self.depth_backbone: 
       self.feature_extractor_depth = EfficientNet.from_name(backbone, in_channels=1) 
 
@@ -39,32 +55,45 @@ class EfficientDisparity(nn.Module):
     self._num_classes = num_classes
     
     dc = []
-    for i in range( len(self.feature_sizes)-1 ):
-      if i == 0:
-        if self.depth_backbone: 
-          mult = 4
+    pred_flow_pyramid = []
+    upsample_flow_layers = []
+
+    self.feature_sizes = [8] + self.feature_sizes
+    for i in range( 1, len(self.feature_sizes) ):
+        if i == 1:
+          inc_feat_0 = (int(ced_real>0) + int(ced_render>0) + int(ced_render_d>0) + int(ced_real_d>0)) * self.feature_sizes[-i ] 
         else:
-          mult = 2
-        dc.append( deconv(self.feature_sizes[- (i+1) ] * mult, self.feature_sizes[-(i+2)] ) )
-      else:
-        dc.append( deconv(self.feature_sizes[- (i+1) ] , self.feature_sizes[-(i+2)] ) )
+          inc_feat_0 = (int(ced_real>=i) + int(ced_render>=i) + int(ced_render_d>=i) + int(ced_real_d>=i) + 1 ) * self.feature_sizes[-i]
+          if self.pred_flow_pyramid_add and self.pred_flow_pyramid:
+            inc_feat_0 += 2
+
+        out_feat = self.feature_sizes[- (i+1) ] #leave this number for now on constant
+        dc.append( deconv( inc_feat_0 , out_feat ) )
+        print( 'Network inp:', inc_feat_0, ' out: ', out_feat )
+      
+        if self.pred_flow_pyramid:
+          pred_flow_pyramid.append( predict_flow( inc_feat_0 ) )
+          upsample_flow_layers.append( nn.ConvTranspose2d(
+            2, 2, 4, 2, 1, bias=False)) 
+
     self.deconvs = nn.ModuleList(dc)
 
-    if seperate_flow_head == True:
-      self.pred_head_flow = deconv(self.feature_sizes[0], 2*(num_classes-1))
-    else:
-      self.pred_head_flow = deconv(self.feature_sizes[0], 2)
+    pred_flow_pyramid.append( predict_flow( self.feature_sizes[0]) )
+    if self.pred_flow_pyramid:
+      self.pred_flow_pyramid= nn.ModuleList( pred_flow_pyramid )
+      self.upsample_flow_layers = nn.ModuleList(upsample_flow_layers)
+
     self.pred_head_label = deconv(self.feature_sizes[0], self._num_classes)
 
     self.up_in = torch.nn.UpsamplingBilinear2d(size=(self.size, self.size))
     self.input_trafos = transforms.Compose([
       transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-
     self.norm_depth = transforms.Normalize([0.485,0.485], [0.229,0.229])
     self.up_out = torch.nn.UpsamplingNearest2d(size=(480, 640))
-
+    self.up_out_bl = torch.nn.UpsamplingBilinear2d(size=(480, 640))
     self.up_nn_in= torch.nn.UpsamplingNearest2d(size=(self.size, self.size))
+
 
   def forward(self, data, idx=False, label=None):
     """Forward pass
@@ -94,62 +123,75 @@ class EfficientDisparity(nn.Module):
     if self.depth_backbone: 
       real_d =  self.up_nn_in(data[:,6][:,None,:,:] ) 
       render_d =  self.up_nn_in(data[:,7][:,None,:,:] )
-      feat_real_d = self.feature_extractor_depth.extract_features_layerwise( real_d , idx_extract = self.idx_extract[-1:])
-      feat_render_d = self.feature_extractor_depth.extract_features_layerwise( render_d , idx_extract = self.idx_extract[-1:])
+      feat_real_d = self.feature_extractor_depth.extract_features_layerwise( real_d , idx_extract = self.idx_extract[-(self.ced_real_d):])
+      feat_render_d = self.feature_extractor_depth.extract_features_layerwise( render_d , idx_extract = self.idx_extract[-(self.ced_render_d):])
     feat_real  = self.feature_extractor.extract_features_layerwise( real , idx_extract = self.idx_extract)
     feat_render = self.feature_extractor.extract_features_layerwise( render, idx_extract = self.idx_extract)
     
-    # Residual network structure with skip connections
-    if self.depth_backbone: 
-      inp_up1 = torch.cat([feat_real[-1],feat_render[-1], feat_real_d[-1], feat_render_d[-1]], dim=1)
-    else:
-      inp_up1 = torch.cat([feat_real[-1],feat_render[-1] ], dim=1)
-    
-    out_deconv = self.deconvs[0](inp_up1)
+    pred_flow_pyramid_feat = []
 
-    # dim is used to make sure when upsampling to have the correct shape 17-> 34 but 33 is needed. Simply delete last row/col
-    for j, d in enumerate( self.deconvs[1:]):
-      dim = feat_real[-2-j].shape[3]
+    x = None
+    for j in range( 1,len( self.deconvs)+1 ):
+      # calculate input: 
+
+      # accumulate input to each layer      
+      if j-1 < self.ced_real:
+        x = cat( x, feat_real[-j] )
+      if j-1 < self.ced_render: 
+        x = cat( x, feat_render[-j])
+      if j-1 < self.ced_real_d:
+        x = cat( x, feat_real_d[-j])
+      if j-1 < self.ced_render_d:
+        x = cat( x, feat_render_d[-j])
+      if j > 1 and self.pred_flow_pyramid_add:
+        dim = x.shape[3]
+        # upsample flow
+        f_up = self.upsample_flow_layers[j-2]( pred_flow_pyramid_feat[-1]) [:,:,:dim,:dim]
+        x = cat( x, f_up )
       
-      if j < self.connections_encoder_decoder: 
-        inp = feat_real[-2-j] + out_deconv[:,:,:dim,:dim] 
-      else:
-        inp = out_deconv[:,:,:dim,:dim]
-      # DECONV with skip conncetions d( feat_real[-2-j] + out_deconv[:,:,:dim,:dim] )
-      out_deconv = d( inp )
-      
-    # no residual for last layer. Here maybe convert to gray scale and add residual. Not sure if this would be a good idea of if this has been proofen to work before
-    dim = real.shape[3]
+      # predict flow at each level
+      if self.pred_flow_pyramid:
+        pred_flow_pyramid_feat.append( self.pred_flow_pyramid[ j-1 ](x) )
+        try:
+          dim = feat_real[-(j+1)].shape[3]
+          pred_flow_pyramid_feat[-1] = pred_flow_pyramid_feat[-1][:,:,:dim,:dim] 
+        except:
+          pass
+
+      # apply upcovn layer
+      x = self.deconvs[j-1](x)
+      try:
+        dim = feat_real[-(j+1)].shape[3]
+        x = x[:,:,:dim,:dim]
+      except:
+        pass
+
+
+    # predict flow
+    pred_flow_pyramid_feat.append(self.pred_flow_pyramid[-1](x))
+    pred_flow_pyramid_feat.append( self.up_out_bl( pred_flow_pyramid_feat[-1] ) )
     
-    if self.seperate_flow_head:
-      flow_all = self.pred_head_flow( out_deconv )[:,:,:dim,:dim]
-      flow = torch.zeros( flow_all[:,:2,:,:].shape, dtype= flow_all.dtype, device= flow_all.device)
-      for b in range(BS):
-        flow[b,:,:,:] = flow_all[b,int(idx[b,0])*2:int(idx[b,0])*2+2,:,:]
-
-    else:
-      flow = self.pred_head_flow( out_deconv )[:,:,:dim,:dim]
-    segmentation = self.pred_head_label( out_deconv )[:,:,:dim,:dim]
-
-    flow = self.up_out(flow)
+    # predict label
+    segmentation = self.pred_head_label( x )
     segmentation = self.up_out(segmentation)
 
     if label is None:
       label = segmentation.argmax(dim=1)
 
-    return flow, segmentation
+    return pred_flow_pyramid_feat, segmentation
 
 if  __name__ == "__main__":
-  # model = EfficientDisparity(num_classes = 22, backbone= f'efficientnet-b4', connections_encoder_decoder = 2, depth_backbone = False, seperate_flow_head= True )
-  # BS = 4
-  # H = 480
-  # W = 640
-  # C = 6
-  # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-  # data = torch.ones( (BS,C,H,W), device=device )
-  # model = model.to(device)
-  # idx = torch.linspace(0,BS-1,BS)[:,None]
-  # out = model(data, idx = idx)
-  for i in range(0,7):
-    model = EfficientDisparity(num_classes = 22, backbone= f'efficientnet-b{i}', connections_encoder_decoder = 2, depth_backbone = True)
+  model = EfficientDisparity(num_classes = 22, backbone= 'efficientnet-b2', seperate_flow_head= False, pred_flow_pyramid=True, pred_flow_pyramid_add=True, ced_real=3, ced_render=3, ced_render_d=2,ced_real_d=2)
+  BS = 2
+  H = 480
+  W = 640
+  C = 8
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+  data = torch.ones( (BS,C,H,W), device=device )
+  model = model.to(device)
+  idx = torch.linspace(0,BS-1,BS)[:,None]
+  out = model(data, idx = idx)
+  
+  # for i in range(0,7):
+  #   model = EfficientDisparity(num_classes = 22, backbone= f'efficientnet-b{i}', connections_encoder_decoder = 2, depth_backbone = True)
   

@@ -1,4 +1,4 @@
-model_path: "/media/scratch1/jonfrey/models/runs/efficient_disparity_natrix/L1_loss_and_fix_upper_layers/_" #overfit_1_batch_bs_1
+model_path: "/media/scratch1/jonfrey/models/runs/efficient_flownet/debug/_" #overfit_1_batch_bs_1
 flownet: False
 checkpoint_restore: false
 checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/2020-11-08T00:36:57_b4_res2_loss_5to1_lr5-4_no_depth_no_skip_24h/epoch=96-avg_val_disparity_float=15.5202.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
@@ -27,10 +27,14 @@ model:
 
 efficient_disp_cfg:
   num_classes: 22
-  backbone: efficientnet-b4
-  connections_encoder_decoder: 0
-  depth_backbone: false
-  seperate_flow_head: true
+  backbone: 'efficientnet-b3'
+  seperate_flow_head: False
+  pred_flow_pyramid: True
+  pred_flow_pyramid_add: True
+  ced_real: 3
+  ced_render: 3
+  ced_render_d: 0
+  ced_real_d: 0
 
 refine_cfg:
   iterations: 1
@@ -40,14 +44,14 @@ training_params_limit: True
 
 
 loss:
-  weight_semantic_segmentation: 5
-  weight_flow: 0
-  weight_flow_l1: 1
+  weight_semantic_segmentation: 0
+  weight_flow: 1
+  weight_flow_l1: 0
   weight_pose: 0
-  weight_trans: 1
+  weight_trans: 0
 
 epochs: 500
-lr: 1.0e-5
+lr: 5.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
@@ -87,7 +91,7 @@ training:
 
 visu:
   number_images_log_train: 2
-  number_images_log_test: 2
+  number_images_log_test: 0
   number_images_log_val: 2
   network_input_batch: False
   log_to_file: False
@@ -98,8 +102,8 @@ early_stopping_cfg:
   patience: 100
 
 loader:
-  batch_size: 4
-  num_workers: 4
+  batch_size: 16
+  num_workers: 2
   shuffle: True
   pin_memory: True
 
@@ -195,7 +199,7 @@ d_train:
     max_matches: 10000
     max_iterations: 10000
   output_cfg:
-    overfitting_nr_idx: 100
+    overfitting_nr_idx: 1
     vm_in_dataloader: true
     noise_translation: 0.02
     noise_rotation: 30

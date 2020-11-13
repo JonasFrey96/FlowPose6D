@@ -92,6 +92,9 @@ def flow_to_trafo_PnP(*args, **kwargs):
 
 
     m = filter_pcd( P_crop_d)
+
+    if torch.sum(m) < 50:
+        return False, torch.eye(4, dtype= u_map.dtype, device=u_map.device )
     P_crop_d  = P_crop_d[ m ]
     real_pixels = real_pixels[m]
     P_ren = P_crop_d
