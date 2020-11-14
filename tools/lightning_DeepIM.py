@@ -303,9 +303,11 @@ class TrackNet6D(LightningModule):
             flow_loss_l1_stack = []
             flow_loss_l2_stack = []
             def l1(f,gt,ind):
-                return torch.sum(  torch.pow( torch.norm ( f[:,:2,:,:] * ind  - gt * ind, dim=1, p=1 ) + 0.0001 , 0.9) , dim=(1,2))   / torch.sum( ind[:,0,:,:], (1,2))
+                div = torch.clamp( torch.sum( ind[:,0,:,:], (1,2)),1)
+                return torch.sum(  torch.pow( torch.norm ( f[:,:2,:,:] * ind  - gt * ind, dim=1, p=1 ) + 0.0001 , 0.9) , dim=(1,2))   / div
             def l2(f,gt,ind):
-                return  torch.sum( torch.norm( f[:,:2,:,:] * ind  - gt * ind, p=2, dim=1 ), dim=(1,2)) / torch.sum( ind[:,0,:,:], (1,2))
+                div = torch.clamp( torch.sum( ind[:,0,:,:], (1,2)),1)
+                return  torch.sum( torch.norm( f[:,:2,:,:] * ind  - gt * ind, p=2, dim=1 ), dim=(1,2)) / div
             for j, f in enumerate(flow) :
                 if j == len(flow)-1:
                     # original size
@@ -592,6 +594,12 @@ class TrackNet6D(LightningModule):
         
 
         fl = log_scalars[f'loss_flow']
+        if torch.any( torch.isnan(loss)):
+            print(flow_loss_l2_stack)
+            loss = torch.zeros(
+                (bs,1), requires_grad=True, dtype=torch.float32, device=self.device)
+            print('got NAN in loss')
+            return loss, log_scalars, False
 
         return loss, log_scalars, suc
     def on_epoch_start(self):

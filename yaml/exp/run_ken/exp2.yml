@@ -1,12 +1,13 @@
-model_path: best/folder/ever/models/runs/efficient_disparity_scaled_24/b4_depth_no_skip_FlowL1_freeze_params
-checkpoint_restore: false
-checkpoint_load: 'false'
+model_path: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flow-disp/obj2-restore-lr-4-0.005-semseg
+flownet: false
+checkpoint_restore: true
+checkpoint_load: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flow-disp/2020-11-14T00:11:36_lr-4/epoch=6-avg_val_disparity_float=41.4601.ckpt
 mail: false
 model_mode: fit
 model:
-  df_load: true
-  df_refiner: /cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth
-  df_pose_estimator: /cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth
+  df_load: false
+  df_refiner: /media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth
+  df_pose_estimator: /media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth
   df_refine: false
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
@@ -24,22 +25,31 @@ model:
   sem_seg: true
 efficient_disp_cfg:
   num_classes: 22
-  backbone: efficientnet-b4
-  connections_encoder_decoder: 0
-  depth_backbone: true
+  backbone: efficientnet-b3
+  seperate_flow_head: false
+  pred_flow_pyramid: true
+  pred_flow_pyramid_add: true
+  ced_real: 3
+  ced_render: 3
+  ced_render_d: 0
+  ced_real_d: 0
+refine_cfg:
+  iterations: 1
+  feedback: pred_flow_gt_label
+training_params_limit: true
 loss:
-  weight_semantic_segmentation: 5
-  weight_flow: 0
+  weight_semantic_segmentation: 0.005
+  weight_flow: 1
+  weight_flow_l1: 0
   weight_pose: 0
   weight_trans: 0
-  weight_flow_l1: 1
 epochs: 500
-lr: 5.0e-05
+lr: 0.0001
 lr_cfg:
   on_plateau_cfg:
     mode: min
-    factor: 0.5
-    threshold: 0.05
+    factor: 0.2
+    threshold: 0.1
   interval: epoch
   frequency: 1
 vm:
@@ -47,7 +57,6 @@ vm:
   load_images: false
 eval:
   threshold_add: 0.02
-training_params_limit: true
 trainer:
   num_nodes: 1
   precision: 16
@@ -55,9 +64,9 @@ trainer:
   accumulate_grad_batches: 1
   fast_dev_run: false
   limit_train_batches: 1500
-  limit_val_batches: 150
-  limit_test_batches: 100
-  progress_bar_refresh_rate: 10
+  limit_val_batches: 10
+  limit_test_batches: 1500
+  progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false
   profiler: false
@@ -69,19 +78,18 @@ training:
   clamp_delta_t_pred: 0.1
   trans_deviation_resample_inital_pose: 0.3
 visu:
-  number_images_log_train: 2
-  number_images_log_test: 2
-  number_images_log_val: 2
+  number_images_log_train: 0
+  number_images_log_test: 0
+  number_images_log_val: 0
   network_input_batch: false
   log_to_file: true
   always_calculate: false
-  full_val: true
+  full_val: false
 early_stopping_cfg:
-  patience: 30
-  min_delta: -0.1
+  patience: 100
 loader:
-  batch_size: 6
-  num_workers: 2
+  batch_size: 16
+  num_workers: 18
   shuffle: true
   pin_memory: true
 d_test:
@@ -112,13 +120,13 @@ d_test:
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
-    max_matches: 1500
+    max_matches: 10000
     max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 25
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -150,7 +158,8 @@ d_train:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: null
+  obj_list_fil:
+  - 2
   obj_list_sym:
   - 12
   - 15
@@ -173,13 +182,13 @@ d_train:
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
-    max_matches: 1500
+    max_matches: 2000
     max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 25
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false

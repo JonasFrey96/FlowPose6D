@@ -1,14 +1,14 @@
-model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/efficient_disparity_depthmap/debug"
-
+model_path: "/cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flow-disp/debug"
+flownet: False
 checkpoint_restore: false
-checkpoint_load: "false"
+checkpoint_load: "/media/scratch1/jonfrey/models/runs/cluster_disp_16/2020-11-08T00:36:57_b4_res2_loss_5to1_lr5-4_no_depth_no_skip_24h/epoch=96-avg_val_disparity_float=15.5202.ckpt" #"/media/scratch1/jonfrey/models/runs/cluster/epoch=55-avg_val_dis_float=23.1151.ckpt" #
 mail: false
-model_mode: fit #test
+model_mode: fit #fit #test
 
 model:
-  df_load: True
-  df_refiner: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
-  df_pose_estimator: "/cluster/work/riner/users/PLR-2020/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
+  df_load: False
+  df_refiner: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth"
+  df_pose_estimator: "/media/scratch1/jonfrey/models/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth"
   df_refine: False
   df_w_normal: 0.015
   df_w_normal_rate: 0.3
@@ -26,24 +26,37 @@ model:
   sem_seg: True
 
 efficient_disp_cfg:
-  num_classes: 22 
-  backbone: 'efficientnet-b1'
-  connections_encoder_decoder: 2 # number of residual connections
-  depth_backbone: True
+  num_classes: 22
+  backbone: 'efficientnet-b3'
+  seperate_flow_head: False
+  pred_flow_pyramid: True
+  pred_flow_pyramid_add: True
+  ced_real: 3
+  ced_render: 3
+  ced_render_d: 0
+  ced_real_d: 0
+
+refine_cfg:
+  iterations: 1
+  feedback: pred_flow_gt_label
+
+training_params_limit: True
+
 
 loss:
-  weight_semantic_segmentation: 10
+  weight_semantic_segmentation: 0
   weight_flow: 1
+  weight_flow_l1: 0
   weight_pose: 0
   weight_trans: 0
 
 epochs: 500
-lr: 5.0e-4
+lr: 1.0e-3
 lr_cfg:
   on_plateau_cfg:
     mode: "min"
-    factor: 0.5
-    threshold: 0.05
+    factor: 0.2
+    threshold: 0.1
   interval: "epoch"
   frequency: 1
 
@@ -60,10 +73,10 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 1
   fast_dev_run: false
-  limit_train_batches: 10
+  limit_train_batches: 1500
   limit_val_batches: 10
-  limit_test_batches: 100
-  progress_bar_refresh_rate: 10
+  limit_test_batches: 1500
+  progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false
   profiler: false
@@ -77,23 +90,22 @@ training:
   trans_deviation_resample_inital_pose: 0.3
 
 visu:
-  number_images_log_train: 2
-  number_images_log_test: 2
-  number_images_log_val: 2
+  number_images_log_train: 0
+  number_images_log_test: 0
+  number_images_log_val: 0
   network_input_batch: False
   log_to_file: False
   always_calculate: False
-  full_val: True
+  full_val: False
 
 early_stopping_cfg:
-  patience: 5
-  min_delta: -0.1
+  patience: 100
 
 loader:
   batch_size: 16
   num_workers: 18
-  shuffle: true
-  pin_memory: true
+  shuffle: True
+  pin_memory: True
 
 d_test:
   name: "ycb"
@@ -101,7 +113,7 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: null #null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
+  obj_list_fil:  null # if not null add list with specific elements -12 -17 is agood mix in general (starting at 0-20) for 21 objects
   obj_list_sym:
     - 12
     - 15
@@ -123,13 +135,13 @@ d_test:
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
-    max_matches: 1500
+    max_matches: 10000
     max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 20
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -155,14 +167,14 @@ d_test:
     visu:
       status: true
       return_img: true
-
 d_train:
   name: "ycb"
   objects: 21
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil: null # if not null add list with specific elements
+  obj_list_fil: # if not null add list with specific elements
+    - 2
   obj_list_sym:
     - 12
     - 15
@@ -185,13 +197,13 @@ d_train:
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
-    max_matches: 1500
+    max_matches: 2000
     max_iterations: 10000
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
     noise_translation: 0.02
-    noise_rotation: 20
+    noise_rotation: 30
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
