@@ -266,3 +266,8 @@ Once built, it can be run with `./labeler <path-to-data-dir>`. Currently, it ass
 ## License
 
 Licensed under the [MIT License](LICENSE)
+
+ffmpeg -framerate 1 -pattern_type glob -i '0_Flow_Gradient_Crop_left_gt__right_pred_test_nr_*.png' -c:v libx264 -r 30 -pix_fmt yuv420p out.mp4
+ffmpeg -framerate 30 -pattern_type glob -i '0_Flow_Gradient_Crop_left_gt__right_pred_test_nr_*.jpg' -c:v libx264 -pix_fmt yuv420p out.mp4
+
+ffmpeg -framerate 30 -pattern_type glob -i '0_Flow_Gradient_Crop_left_gt__right_pred_test_nr_*.jpg' out.mp4

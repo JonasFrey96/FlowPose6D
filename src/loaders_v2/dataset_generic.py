@@ -1,7 +1,7 @@
 from loaders_v2 import YCB, Laval, Backend
 import random
 import time
-
+import torch
 class GenericDataset():
 
     def __init__(self, cfg_d, cfg_env):
@@ -28,6 +28,7 @@ class GenericDataset():
                 'Its not possible to return the batch not as a list if the sequence length is larger than 1.')
 
         if self._obj_list_fil is not None:
+            
             self._batch_list = [
                 x for x in self._batch_list if x[0] in self._obj_list_fil]
         self._length = len(self._batch_list)
@@ -79,19 +80,30 @@ class GenericDataset():
         seq = []
         one_object_visible = False
         # iterate over a sequence specified in the batch list
+        fails = 0
         for k in self._batch_list[index][2]:
             # each batch_list entry has the form [obj_name, obj_full_path, index_list]
             tmp = False
+
             while type(tmp) is bool:
                 num = '0' * int(6 - len(str(k))) + str(k)
                 tmp = self._backend.getElement(
                     desig=f'{self._batch_list[index][1]}/{num}', obj_idx=self._batch_list[index][0])
+                # if random.randrange(0, 10) > 5:
+                #     tmp = False
                 if type (tmp) is bool:
-                    # print('Skipped a frame')
-                    index = random.randrange(0, len(self))
+                    print('Skipped a frame fails', f'{self._batch_list[index][1]}/{num}')
+                    # ret = tuple( [torch.tensor(1)]*12)
+                    # ret += ( (f'{self._batch_list[index][1]}/{num}', self._batch_list[index][0]), False )
+                    # return [ret] 
+                    
+                    fails += 1
+                    index = random.randrange(0, len(self)-1)
                     if self.overfitting_nr_idx != -1:
                         index = random.randrange(
                             0, self.overfitting_nr_idx) * 1000 % self._length
                     k = self._batch_list[index][2][0]
             seq.append(tmp)
         return seq
+
+

@@ -11,7 +11,26 @@ def get_ref_ite(exp):
         refine_iterations = random.randrange(
             refine_iterations - rand)
     return refine_iterations
-
+def eroision_batch(t,t_size):
+    "t: tensor shape BS, C, H,W"
+    "t_size: tensor shape BS"
+    out_c = t.shape[1]
+    for b in range( t.shape[0] ):
+        size = int( t_size[b] )
+        kernel_tensor = torch.ones( (out_c,1,size,size) , device= t.device, dtype = t.dtype)
+        t[b] = (torch.nn.functional.conv2d(t[b][None], kernel_tensor, padding=(int((size)/2), int((size)/2))) == (size*size))[0,:,:t.shape[2], :t.shape[3]]
+    return t
+def get_scale_for_erosion(ero_in):
+    res = torch.sum ( ero_in, dim = (2,3))
+    res[res < 1000] = 0
+    res[res < 5000] = 5
+    res[res < 10000] = 10
+    res[res < 30000] = 20
+    res[res < 40000] = 25
+    res[res < 50000] = 30
+    res[res >= 50000] = 40
+    return res
+    
 def get_inital(mode, gt_rot_wxyz, gt_trans, pred_r_current, pred_t_current, cfg={}, d='cpu'):
     if mode == 'DenseFusionInit':
         pred_rot_wxyz = pred_r_current

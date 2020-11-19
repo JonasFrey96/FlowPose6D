@@ -8,10 +8,15 @@ def backproject_point(p, fx, fy, cx, cy):
     return u, v
 
 
-def backproject_points(p, fx, fy, cx, cy):
+def backproject_points(p, fx=None, fy=None, cx=None, cy=None, K=None):
     """
     p.shape = (nr_points,xyz)
     """
+    if not K is None:
+        fx = K[0,0]
+        fy = K[1,1]
+        cx = K[0,2]
+        cy = K[1,2]
     # true_divide
     u = torch.round((torch.div(p[:, 0], p[:, 2]) * fx) + cx)
     v = torch.round((torch.div(p[:, 1], p[:, 2]) * fy) + cy)

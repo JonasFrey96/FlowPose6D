@@ -210,12 +210,12 @@ def get_bb_from_depth(depth):
     return bb_lsd
 
 
-def get_bb_real_target(target, cam):
+def get_bb_real_target(target, K):
     bb_ls = []
     for i in range(target.shape[0]):
         # could not find a smart alternative to avoide looping
         masked_idx = backproject_points(
-            target[i], fx=cam[i, 2], fy=cam[i, 3], cx=cam[i, 0], cy=cam[i, 1])
+            target[i], K=K[i])
         min1 = torch.min(masked_idx[:, 0])
         max1 = torch.max(masked_idx[:, 0])
         max2 = torch.max(masked_idx[:, 1])
