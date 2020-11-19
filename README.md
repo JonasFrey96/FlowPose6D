@@ -1,12 +1,33 @@
 # TrackThis
 
-![](doc/TrackThis%20Kalman%20Filter.png)
+![](docs/overview_network.png)
+![](docs/full_network.png)
+
+## Overview repository:
+* **tools**
+  * **lightning.py** Lightning Module of the Full Pipeline
+  * **main.py** Training FlowPose
+  * **test.py** Evaluating FlowPose
+* **src**
+  * **loaders_v2** Dataloader for the YCB Dataset
+  * **rotation**
+* **docs** Images and
+
+## Example Output YCB Dataset:
+### Flow Gradient Direction Visualization:
+![](docs/flow_original.gif)
+
+(Left ground truth computed by ray-casting. Right FlowPose prediction)
+### Tracking Result:
+![](docs/pose_original.gif)
+
+(Left ground truth. Right FlowPose prediction)
 
 ## Instructions
 How to run the network: 
 ```
 cd ~ 
-git clone -b pixelwise-refiner https://github.com/JonasFrey96/PLR3.git
+git clone -b flow-pose https://github.com/JonasFrey96/PLR3.git
 ```
 Install track3 conda enviorment track3:
 ```

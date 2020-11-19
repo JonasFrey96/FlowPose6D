@@ -32,7 +32,6 @@ import torchvision
 from pathlib import Path
 
 
-from estimation.state import State_R3xQuat, State_SE3, points
 from helper import rotation_angle, re_quat
 from visu import plot_pcd, plot_two_pcd
 from helper import generate_unique_idx
@@ -162,6 +161,7 @@ class YCB(Backend):
 
         if self._use_vm:
             cam_flag = self.get_camera(desig,K=False,idx=True)
+
             new_tup = self.get_rendered_data( np.array(img)[:,:,:3], depth, label, model_points, int(obj_idx), K_cam, cam_flag, h_gt, h_real_est)
             if new_tup is False:
                 if self.err:

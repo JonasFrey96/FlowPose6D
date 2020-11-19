@@ -1,4 +1,4 @@
-from loaders_v2 import YCB, Laval, Backend
+from loaders_v2 import YCB, Backend
 import random
 import time
 import torch
@@ -11,10 +11,8 @@ class GenericDataset():
         if cfg_d['name'] == "ycb":
             self._backend = self._backend = YCB(cfg_d=cfg_d,
                                                 cfg_env=cfg_env)
-        elif cfg_d['name'] == "laval":
-            self._backend = Laval(
-                cfg_d=cfg_d,
-                cfg_env=cfg_env)
+        else:
+            raise ValueError('dataset not implemented in cfg_d')
 
         self._obj_list_sym = cfg_d['obj_list_sym']
         self._obj_list_fil = cfg_d['obj_list_fil']
@@ -86,7 +84,7 @@ class GenericDataset():
             tmp = False
 
             while type(tmp) is bool:
-                num = '0' * int(6 - len(str(k))) + str(k)
+                num = '0' * int(6 - len(str(k))) + str(k)# 
                 tmp = self._backend.getElement(
                     desig=f'{self._batch_list[index][1]}/{num}', obj_idx=self._batch_list[index][0])
                 # if random.randrange(0, 10) > 5:

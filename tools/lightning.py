@@ -2,7 +2,6 @@ import warnings
 warnings.simplefilter("ignore", UserWarning)
 
 import copy
-import datetime
 import sys
 import os
 import time
@@ -18,11 +17,9 @@ import numpy as np
 import pandas as pd
 import random
 import sklearn
-from scipy.spatial.transform import Rotation as R
+# from scipy.spatial.transform import Rotation as R
 from math import pi
 from math import ceil
-import coloredlogs
-import datetime
 
 
 # src modules
@@ -36,32 +33,18 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-coloredlogs.install()
-
-# network dense fusion
-from lib.loss import Loss
-from lib.loss_refiner import Loss_refine
 from lib.loss_focal import FocalLoss
 from lib.loss_flow import FlowLoss
+from deep_im import LossAddS
 
 
 from loaders_v2 import GenericDataset
 from visu import Visualizer
 from helper import re_quat, flatten_dict
-from helper import get_bb_from_depth, get_bb_real_target
-from deep_im import DeepIM, ViewpointManager
-from helper import BoundingBox, anal_tensor
-from helper import get_delta_t_in_euclidean, compute_auc
-from helper import backproject_points_batch, backproject_points, backproject_point
-from deep_im import LossAddS
+from helper import anal_tensor
+from helper import compute_auc
 from rotations import *
-from pixelwise_refiner import PixelwiseRefiner
 from model import EfficientDisparity
-import torch.autograd.profiler as profiler
-
-from deep_im import flow_to_trafo
-from deep_im import flow_to_trafo_PnP
-from scipy.spatial.transform import Rotation as R
 
 def check_exp(exp):
     if exp['d_test'].get('overfitting_nr_idx', -1) != -1 or exp['d_train'].get('overfitting_nr_idx', -1) != -1:
@@ -85,6 +68,7 @@ class Logger2(object):
     def __init__(self, p):
         self.terminal = sys.stdout
         self.p = p
+
     def write(self, message):
         with open (self.p, "a") as self.log:            
             self.log.write(message)
@@ -124,27 +108,13 @@ class TrackNet6D(LightningModule):
         for i in range(0, int(torch.cuda.device_count())):
             print(f'GPU {i} Type {torch.cuda.get_device_name(i)}')
 
-        # number of input points to the network
         self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
 
-        # downsample layers for loss function
-        input_res_h, input_res_w = self.pixelwise_refiner.size, self.pixelwise_refiner.size
-        ups = []
-        nns = []
-        for i in range(0,len(self.pixelwise_refiner.feature_sizes) ):
-            print( ceil( input_res_h/(2**i)  )   )
-            ups.append( torch.nn.UpsamplingBilinear2d(size=( ceil( input_res_h/(2**i)  ) ,ceil( input_res_w/(2**i)  )) ) )
-            nns.append( torch.nn.UpsamplingNearest2d(size=( ceil( input_res_h/(2**i)  ) ,ceil( input_res_w/(2**i)  )) )  )
-        self.ups = torch.nn.ModuleList(ups)
-        self.nns = torch.nn.ModuleList(nns)
-        
-
         self.criterion_adds = LossAddS(sym_list=exp['d_train']['obj_list_sym'])
-        self.coefficents = exp['loss'].get('coefficents',[0.0005,0.001,0.005,0.01,0.02,0.08,1])
+        coe = exp['loss'].get('coefficents',[0.0005,0.001,0.005,0.01,0.02,0.08,1])
         self.criterion_focal = FocalLoss() 
         s = self.pixelwise_refiner.size
-        
-        self.criterion_flow = FlowLoss(s, s, self.coefficents)
+        self.criterion_flow = FlowLoss(s, s, coe)
        
         self.best_validation = 999
         self.visualizer = None
@@ -197,7 +167,6 @@ class TrackNet6D(LightningModule):
                         frame[i][b] = batch_new[i]
             else:
                 print('Failed to load flow with the new pose estimate')
-
 
     def forward(self, batch):
         suc = True
@@ -533,6 +502,7 @@ class TrackNet6D(LightningModule):
             self.h_track =  h_pred_flow__gt_label.cpu().numpy()
 
         return loss, log_scalars, suc
+    
     def on_epoch_start(self):
         self.counter_images_logged = 0
         self._mode = 'train'
@@ -543,8 +513,7 @@ class TrackNet6D(LightningModule):
                 for b in block.parameters():
                     if j < 15:
                         b.requires_grad = False
-            
-
+    
     def training_step(self, batch, batch_idx):
         st = time.time()
         unique_desig = batch[0][0]

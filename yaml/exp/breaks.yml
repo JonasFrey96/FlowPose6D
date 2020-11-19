@@ -52,9 +52,9 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 4
   fast_dev_run: false
-  limit_train_batches: 1500
+  limit_train_batches: 150
   limit_val_batches: 150
-  limit_test_batches: 1500
+  limit_test_batches: 150
   progress_bar_refresh_rate: 1
   max_epochs: 100
   terminate_on_nan: false

@@ -17,7 +17,7 @@ from pytorch_lightning import seed_everything,Trainer
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from .lightning import TrackNet6D
+from lightning import TrackNet6D
 from helper import pad
 from loaders_v2 import ConfigLoader
 from helper import move_dataset_to_ssd

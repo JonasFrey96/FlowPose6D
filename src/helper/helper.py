@@ -194,16 +194,6 @@ def anal_tensor(T, name, print_on_error = False):
     
 def send_email(text):
     pass
-    # yag = yagmail.SMTP('trackthisplr', "TrackThis")
-    # contents = [
-    #     "Run is finished!",
-    #     text
-    # ]
-    # yag.send('jonfrey@student.ethz.ch',
-    #          'PLR - TrackThis - Lagopus', contents)
-    # yag.send('yavyas@student.ethz.ch',
-    #          'PLR - TrackThis - Lagopus', contents)
-
 
 def rotation_angle(q, device):
     # in radians
