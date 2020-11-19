@@ -1,0 +1,192 @@
+model_path: /media/scratch1/jonfrey/models/runs/debug_24h_not_working/debug
+checkpoint_restore: false
+checkpoint_load: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flow-final-report/2020-11-14T21:32:25_connections_5_5-pyramid-L2/epoch=9-avg_val_disparity_float=41.4712.ckpt
+model_mode: fit
+
+efficient_disp_cfg:
+  num_classes: 22
+  backbone: efficientnet-b3
+  seperate_flow_head: false
+  pred_flow_pyramid: true
+  pred_flow_pyramid_add: true
+  ced_real: 5
+  ced_render: 5
+  ced_render_d: 0
+  ced_real_d: 0
+refine_cfg:
+  iterations: 1
+  feedback: pred_flow_gt_label
+training_params_limit: false
+loss:
+  weight_semantic_segmentation: 1
+  weight_flow: 0
+  coefficents:
+  - 0.0005
+  - 0.001
+  - 0.005
+  - 0.01
+  - 0.02
+  - 0.08
+  - 1
+epochs: 500
+lr: 1.0e-03
+lr_cfg:
+  on_plateau_cfg:
+    mode: min
+    factor: 0.2
+    threshold: 0.1
+  interval: epoch
+  frequency: 1
+
+trainer:
+  num_nodes: 1
+  precision: 16
+  auto_lr_find: false
+  accumulate_grad_batches: 2
+  fast_dev_run: false
+  limit_train_batches: 150
+  limit_val_batches: 150
+  limit_test_batches: 150
+  progress_bar_refresh_rate: 1
+  max_epochs: 100
+  terminate_on_nan: false
+  profiler: false
+  gpus: -1
+  num_sanity_val_steps: 0
+visu:
+  number_images_log_train: 0
+  number_images_log_test: 0
+  number_images_log_val: 0
+  log_to_file: false
+  always_calculate: false
+  full_val: false
+early_stopping_cfg:
+  patience: 100
+loader:
+  batch_size: 8
+  num_workers: 6
+  shuffle: true
+  pin_memory: true
+d_test:
+  name: ycb
+  objects: 21
+  num_points: 1000
+  num_pt_mesh_small: 2300
+  num_pt_mesh_large: 2300
+  obj_list_fil:
+  - 2
+  obj_list_sym:
+  - 12
+  - 15
+  - 18
+  - 19
+  - 20
+  batch_list_cfg:
+    sequence_names: null
+    seq_length: 1
+    fixed_length: true
+    sub_sample: 1
+    mode: dense_fusion_test
+    add_syn_to_train: false
+  noise_cfg:
+    status: false
+    noise_trans: 0.0
+  flow_cfg:
+    sub: 2
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 10000
+    max_iterations: 10000
+  output_cfg:
+    overfitting_nr_idx: -1
+    vm_in_dataloader: true
+    noise_translation: 0.01
+    noise_rotation: 10
+    return_same_size_tensors: true
+    force_one_object_visible: true
+    status: false
+    refine: false
+    add_depth_image: true
+    add_mask_image: true
+    norm_render: false
+    color_jitter_render:
+      active: false
+      cfg:
+      - 0.2
+      - 0.2
+      - 0.2
+      - 0.05
+    norm_real: false
+    color_jitter_real:
+      active: false
+      cfg:
+      - 0.2
+      - 0.2
+      - 0.2
+      - 0.05
+    visu:
+      status: true
+      return_img: true
+d_train:
+  name: ycb
+  objects: 21
+  num_points: 1000
+  num_pt_mesh_small: 2300
+  num_pt_mesh_large: 2300
+  obj_list_fil:
+  - 2
+  obj_list_sym:
+  - 12
+  - 15
+  - 18
+  - 19
+  - 20
+  batch_list_cfg:
+    sequence_names: null
+    seq_length: 1
+    no_list_for_sequence_len_one: true
+    fixed_length: true
+    sub_sample: 1
+    mode: dense_fusion_train
+    add_syn_to_train: true
+  noise_cfg:
+    status: false
+    noise_trans: 0
+  flow_cfg:
+    sub: 2
+    min_matches: 50
+    dil_kernel_size: 2
+    min_vis_size: 200
+    max_matches: 2000
+    max_iterations: 10000
+  output_cfg:
+    overfitting_nr_idx: -1
+    vm_in_dataloader: true
+    noise_translation: 0.01
+    noise_rotation: 10
+    return_same_size_tensors: true
+    force_one_object_visible: true
+    status: false
+    refine: false
+    add_depth_image: true
+    add_mask_image: true
+    norm_render: false
+    color_jitter_render:
+      active: false
+      cfg:
+      - 0.2
+      - 0.2
+      - 0.2
+      - 0.05
+    norm_real: false
+    color_jitter_real:
+      active: false
+      cfg:
+      - 0.2
+      - 0.2
+      - 0.2
+      - 0.05
+    visu:
+      status: true
+      return_img: true

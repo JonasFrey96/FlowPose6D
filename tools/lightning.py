@@ -477,10 +477,8 @@ class TrackNet6D(LightningModule):
 
         w_s = self.exp.get('loss', {}).get('weight_semantic_segmentation', 0.5)
         w_f = self.exp.get('loss', {}).get('weight_flow', 0.5)
-        w_f_l1 = self.exp.get('loss', {}).get('weight_flow_l1', 0.5)
-        
  
-        loss = w_s * focal_loss + w_f * loss_l2_sum  #dis + w_t * translation_loss
+        loss = w_s * focal_loss + w_f * loss_l2_sum
         
         log_scalars[f'loss_segmentation'] = float(
             torch.mean(focal_loss, dim=0).detach())

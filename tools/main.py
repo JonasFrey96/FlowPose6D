@@ -44,7 +44,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp', type=file_path, default='/home/jonfrey/PLR3/yaml/exp/breaks.yml',  # required=True,
+    parser.add_argument('--exp', type=file_path, default='/home/jonfrey/PLR3/yaml/exp/exp_natrix.yml',  # required=True,
                         help='The main experiment yaml file.')
     parser.add_argument('--env', type=file_path, default='yaml/env/env_natrix_jonas.yml',
                         help='The environment yaml file.')
