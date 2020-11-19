@@ -120,10 +120,8 @@ if __name__ == "__main__":
 
     if exp.get('model_mode', 'fit') == 'fit':
         trainer.fit(model)
-
     elif exp.get('model_mode', 'fit') == 'test':
         trainer.test(model)
-
     else:
         print("Wrong model_mode defined in exp config")
         raise Exception

@@ -73,28 +73,18 @@ class GenericDataset():
 
     def __getitem__(self, index):
         if self.overfitting_nr_idx != -1:
-            index = random.randrange(
-                0, self.overfitting_nr_idx) * 1000 % self._length
+            index = random.randrange(0, self.overfitting_nr_idx) * 1000 % self._length
         seq = []
         one_object_visible = False
         # iterate over a sequence specified in the batch list
         fails = 0
         for k in self._batch_list[index][2]:
-            # each batch_list entry has the form [obj_name, obj_full_path, index_list]
             tmp = False
-
             while type(tmp) is bool:
                 num = '0' * int(6 - len(str(k))) + str(k)# 
                 tmp = self._backend.getElement(
                     desig=f'{self._batch_list[index][1]}/{num}', obj_idx=self._batch_list[index][0])
-                # if random.randrange(0, 10) > 5:
-                #     tmp = False
                 if type (tmp) is bool:
-                    print('Skipped a frame fails', f'{self._batch_list[index][1]}/{num}')
-                    # ret = tuple( [torch.tensor(1)]*12)
-                    # ret += ( (f'{self._batch_list[index][1]}/{num}', self._batch_list[index][0]), False )
-                    # return [ret] 
-                    
                     fails += 1
                     index = random.randrange(0, len(self)-1)
                     if self.overfitting_nr_idx != -1:

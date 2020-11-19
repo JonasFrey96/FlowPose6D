@@ -4,10 +4,10 @@ from efficientnet_pytorch import EfficientNet
 from torch import nn
 from torchvision import transforms
 
-def deconv(in_planes, out_planes):
+def deconv(in_planes, out_planes, bias=False):
     return nn.Sequential(
         nn.ConvTranspose2d(in_planes, out_planes, kernel_size=4,
-                           stride=2, padding=1, bias=False),
+                           stride=2, padding=1, bias=bias),
         nn.LeakyReLU(0.1, inplace=True)
     )
 
@@ -59,6 +59,10 @@ class EfficientDisparity(nn.Module):
     upsample_flow_layers = []
 
     self.feature_sizes = [8] + self.feature_sizes
+    
+    label_feat = [16,8, num_classes]
+    label_layers = []
+    label_i = -1
     for i in range( 1, len(self.feature_sizes) ):
         if i == 1:
           inc_feat_0 = (int(ced_real>0) + int(ced_render>0) + int(ced_render_d>0) + int(ced_real_d>0)) * self.feature_sizes[-i ] 
@@ -70,12 +74,24 @@ class EfficientDisparity(nn.Module):
         out_feat = self.feature_sizes[- (i+1) ] #leave this number for now on constant
         dc.append( deconv( inc_feat_0 , out_feat ) )
         print( 'Network inp:', inc_feat_0, ' out: ', out_feat )
-      
+
+        if i > len(self.feature_sizes)-len(label_feat):
+
+          if label_i == -1:
+            inc_feat_label = inc_feat_0
+          else:
+            inc_feat_label = label_feat[label_i] 
+          label_i += 1
+          out_feat_label = label_feat[label_i]
+          label_layers.append( deconv( inc_feat_label , out_feat_label, bias=True ) )
+
         if self.pred_flow_pyramid:
           pred_flow_pyramid.append( predict_flow( inc_feat_0 ) )
           upsample_flow_layers.append( nn.ConvTranspose2d(
             2, 2, 4, 2, 1, bias=False)) 
 
+    label_layers.append( deconv(label_feat[-2], label_feat[-1], bias=True) )
+    self.label_layers = nn.ModuleList(label_layers)
     self.deconvs = nn.ModuleList(dc)
 
     pred_flow_pyramid.append( predict_flow( self.feature_sizes[0]) )
@@ -83,7 +99,6 @@ class EfficientDisparity(nn.Module):
       self.pred_flow_pyramid= nn.ModuleList( pred_flow_pyramid )
       self.upsample_flow_layers = nn.ModuleList(upsample_flow_layers)
 
-    self.pred_head_label = deconv(self.feature_sizes[0], self._num_classes)
 
     self.up_in = torch.nn.UpsamplingBilinear2d(size=(self.size, self.size))
     self.input_trafos = transforms.Compose([
@@ -131,6 +146,7 @@ class EfficientDisparity(nn.Module):
     pred_flow_pyramid_feat = []
 
     x = None
+    
     for j in range( 1,len( self.deconvs)+1 ):
       # calculate input: 
 
@@ -157,6 +173,12 @@ class EfficientDisparity(nn.Module):
           pred_flow_pyramid_feat[-1] = pred_flow_pyramid_feat[-1][:,:,:dim,:dim] 
         except:
           pass
+      
+
+      if j == len(self.deconvs) - len(self.label_layers)+2 :
+        # clone features for mask prediction.
+        # here the conv are with bias !!!
+        segmentation = x.clone()
 
       # apply upcovn layer
       x = self.deconvs[j-1](x)
@@ -165,16 +187,15 @@ class EfficientDisparity(nn.Module):
         x = x[:,:,:dim,:dim]
       except:
         pass
-
-
-    # predict flow
-    pred_flow_pyramid_feat.append(self.pred_flow_pyramid[-1](x))
-    pred_flow_pyramid_feat.append( self.up_out_bl( pred_flow_pyramid_feat[-1] ) )
     
     # predict label
-    segmentation = self.pred_head_label( x )
+    for l in self.label_layers:
+      segmentation = l(segmentation)
     segmentation = self.up_out(segmentation)
-
+    # predict flow
+    pred_flow_pyramid_feat.append( self.pred_flow_pyramid[-1](x) )
+    pred_flow_pyramid_feat.append( self.up_out_bl( pred_flow_pyramid_feat[-1] ) )
+    
     if label is None:
       label = segmentation.argmax(dim=1)
 

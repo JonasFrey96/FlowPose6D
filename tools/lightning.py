@@ -33,10 +33,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from lib.loss_focal import FocalLoss
-from lib.loss_flow import FlowLoss
-from deep_im import LossAddS
-
+from loss import FocalLoss, FlowLoss, AddSLoss
 
 from loaders_v2 import GenericDataset
 from visu import Visualizer
@@ -110,7 +107,7 @@ class TrackNet6D(LightningModule):
 
         self.pixelwise_refiner = EfficientDisparity( **exp['efficient_disp_cfg'] )
 
-        self.criterion_adds = LossAddS(sym_list=exp['d_train']['obj_list_sym'])
+        self.criterion_adds = AddSLoss(sym_list=exp['d_train']['obj_list_sym'])
         coe = exp['loss'].get('coefficents',[0.0005,0.001,0.005,0.01,0.02,0.08,1])
         self.criterion_focal = FocalLoss() 
         s = self.pixelwise_refiner.size

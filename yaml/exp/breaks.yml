@@ -35,7 +35,7 @@ loss:
   - 0.08
   - 1
 epochs: 500
-lr: 5.0e-05
+lr: 1.0e-03
 lr_cfg:
   on_plateau_cfg:
     mode: min
@@ -77,7 +77,7 @@ visu:
 early_stopping_cfg:
   patience: 100
 loader:
-  batch_size: 4
+  batch_size: 8
   num_workers: 8
   shuffle: true
   pin_memory: true
@@ -174,7 +174,7 @@ d_train:
     max_matches: 2000
     max_iterations: 10000
   output_cfg:
-    overfitting_nr_idx: -1
+    overfitting_nr_idx: 10
     vm_in_dataloader: true
     noise_translation: 0.01
     noise_rotation: 10
