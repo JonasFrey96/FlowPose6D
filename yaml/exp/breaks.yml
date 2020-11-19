@@ -50,7 +50,7 @@ trainer:
   num_nodes: 1
   precision: 16
   auto_lr_find: false
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 2
   fast_dev_run: false
   limit_train_batches: 150
   limit_val_batches: 150
@@ -78,7 +78,7 @@ early_stopping_cfg:
   patience: 100
 loader:
   batch_size: 8
-  num_workers: 8
+  num_workers: 6
   shuffle: true
   pin_memory: true
 d_test:
