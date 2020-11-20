@@ -135,7 +135,7 @@ d_train:
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
   obj_list_fil:
-  - 2
+  - null
   obj_list_sym:
   - 12
   - 15

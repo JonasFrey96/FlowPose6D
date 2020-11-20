@@ -42,6 +42,7 @@ from helper import anal_tensor
 from helper import compute_auc
 from rotations import *
 from model import EfficientDisparity
+from deep_im import flow_to_trafo_PnP
 
 def check_exp(exp):
     if exp['d_test'].get('overfitting_nr_idx', -1) != -1 or exp['d_train'].get('overfitting_nr_idx', -1) != -1:

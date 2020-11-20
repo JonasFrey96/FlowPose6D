@@ -18,8 +18,8 @@ refine_cfg:
   feedback: pred_flow_gt_label
 training_params_limit: false
 loss:
-  weight_semantic_segmentation: 1
-  weight_flow: 0
+  weight_semantic_segmentation: 0.1
+  weight_flow: 1
   coefficents:
   - 0.0005
   - 0.001
@@ -44,7 +44,7 @@ trainer:
   auto_lr_find: false
   accumulate_grad_batches: 2
   fast_dev_run: false
-  limit_train_batches: 150
+  limit_train_batches: 1500
   limit_val_batches: 150
   limit_test_batches: 150
   progress_bar_refresh_rate: 1
@@ -54,17 +54,17 @@ trainer:
   gpus: -1
   num_sanity_val_steps: 0
 visu:
-  number_images_log_train: 0
-  number_images_log_test: 0
-  number_images_log_val: 0
+  number_images_log_train: 2
+  number_images_log_test: 2
+  number_images_log_val: 2
   log_to_file: false
   always_calculate: false
   full_val: false
 early_stopping_cfg:
   patience: 100
 loader:
-  batch_size: 8
-  num_workers: 6
+  batch_size: 4
+  num_workers: 4
   shuffle: true
   pin_memory: true
 d_test:
@@ -134,8 +134,7 @@ d_train:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil:
-  - 2
+  obj_list_fil: null
   obj_list_sym:
   - 12
   - 15
