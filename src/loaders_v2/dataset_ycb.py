@@ -1,66 +1,51 @@
-from helper import rotation_angle, re_quat
-from torch.autograd import Variable
-import torchvision.utils as vutils
-import torchvision.transforms as transforms
-import torchvision.datasets as dset
-import torch.optim as optim
-import torch.backends.cudnn as cudnn
-import torch.nn.parallel
-import torch.nn as nn
-import torch
 import time
 import random
 import numpy as np
-import argparse
-from scipy.spatial.transform import Rotation as R
-from os import path
-import numpy.ma as ma
 import copy
-import scipy.misc
-import scipy.io as scio
-import torch.utils.data as data
-from PIL import Image
-import string
 import math
-import coloredlogs
 import logging
 import os
 import sys
 import pickle
 import glob
-import torchvision
 from pathlib import Path
 
+from PIL import Image
+import cv2
 
-from helper import rotation_angle, re_quat
-from visu import plot_pcd, plot_two_pcd
-from helper import generate_unique_idx
-from loaders_v2 import Backend, ConfigLoader
-from helper import flatten_dict, get_bbox_480_640
+from scipy.spatial.transform import Rotation as R
+import scipy.misc
+import scipy.io as scio
+
+import torchvision.transforms as transforms
+import torch
+
+# From costume modules
+from helper import re_quat
+from loaders_v2 import Backend
 from deep_im import ViewpointManager
 from helper import get_bb_from_depth, get_bb_real_target, backproject_points
 from rotations import *
 
-# for flow
-import cv2
+# For flow calculation
 import trimesh
 from trimesh.ray.ray_pyembree import RayMeshIntersector
 from scipy.interpolate import griddata
+import scipy.ndimage as nd
+
 class YCB(Backend):
     def __init__(self, cfg_d, cfg_env):
         super(YCB, self).__init__(cfg_d, cfg_env)
         self._cfg_d = cfg_d
         self._cfg_env = cfg_env
         self._p_ycb = cfg_env['p_ycb']
-        self._pcd_cad_dict, self._name_to_idx, self._name_to_idx_full = self.get_pcd_cad_models()
-        self._batch_list = self.get_batch_list()
-        self.h = 480
-        self.w = 640
-        self._length = len(self._batch_list)
-        self._norm = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self._pcd_cad_dict, self._name_to_idx, self._name_to_idx_full = self._get_pcd_cad_models()
+        self._batch_list = self._get_batch_list()
+        self._h = 480
+        self._w = 640
+        
         self._num_pt = cfg_d.get('num_points', 1000)
-        self._trancolor = transforms.ColorJitter(0.2, 0.2, 0.2, 0.05)
+        self._trancolor_background = transforms.ColorJitter(0.2, 0.2, 0.2, 0.05)
 
         if cfg_d['output_cfg'].get('color_jitter_real', {}).get('active', False):
             self._color_jitter_real = transforms.Compose([
@@ -83,9 +68,7 @@ class YCB(Backend):
             self._norm_render = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-        self._minimum_num_pt = 50
-        self._xmap = np.array([[j for i in range(self.w)] for j in range(self.h)])
-        self._ymap = np.array([[i for i in range(self.w)] for j in range(self.h)])
+        self._min_visible_mask_size = 50
 
         if self._cfg_d['output_cfg'].get('vm_in_dataloader', False):
             self._use_vm = True
@@ -96,22 +79,21 @@ class YCB(Backend):
                 nr_of_images_per_object=5000,
                 device='cpu',
                 load_images=False)
-            self.up = torch.nn.UpsamplingBilinear2d(size=(self.h, self.w))
-            self.up_nearest = torch.nn.UpsamplingNearest2d(size=(self.h, self.w))
+            self.up = torch.nn.UpsamplingBilinear2d(size=(self._h, self._w))
+            self.up_nearest = torch.nn.UpsamplingNearest2d(size=(self._h, self._w))
             self.K_ren = self.get_camera('data_syn/0019', K=True)
         
-
         if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
             n = self._cfg_d['noise_cfg']
-            self.input_jitter = torchvision.transforms.ColorJitter(
+            self._input_jitter = transforms.ColorJitter(
                 n['jitter_brightness'],
                 n['jitter_contrast'],
                 n['jitter_saturation'],
                 n['jitter_hue'])
-        self.input_grey = torchvision.transforms.RandomGrayscale(
+        self._input_grey = transforms.RandomGrayscale(
             p=self._cfg_d['noise_cfg'].get('p_grey', 0))
         self._load_background()
-        self.load_flow()
+        self._load_flow()
         self.err = False
 
     def getElement(self, desig, obj_idx, h_real_est=None):
@@ -132,9 +114,9 @@ class YCB(Backend):
 
         img_copy = copy.copy( np.array( img) )
         if self._cfg_d['noise_cfg'].get('use_input_jitter', False):
-            img = self.input_jitter(img)
+            img = self._input_jitter(img)
         if self._cfg_d['noise_cfg'].get('p_grey', 0) > 0:
-            img = self.input_grey(img)
+            img = self._input_grey(img)
 
         obj = meta['cls_indexes'].flatten().astype(np.int32)
 
@@ -144,7 +126,7 @@ class YCB(Backend):
         h_gt[:3,:4] =  meta['poses'][:, :, obj_idx_in_list]   
         unique_desig = (desig, obj_idx)
         
-        if np.sum( label == obj_idx) <= self._minimum_num_pt:
+        if np.sum( label == obj_idx) <= self._min_visible_mask_size:
             if self.err:
                 print("Violating in min number points in get Element")
             return False
@@ -161,7 +143,6 @@ class YCB(Backend):
 
         if self._use_vm:
             cam_flag = self.get_camera(desig,K=False,idx=True)
-
             new_tup = self.get_rendered_data( np.array(img)[:,:,:3], depth, label, model_points, int(obj_idx), K_cam, cam_flag, h_gt, h_real_est)
             if new_tup is False:
                 if self.err:
@@ -170,9 +151,7 @@ class YCB(Backend):
             else:
                 tup += new_tup
 
-  
-
-            if self.visu:
+            if self._cfg_d['output_cfg']['visu']['status']:
                 # Depth map # Label # Image
                 tup += (torch.from_numpy(img_copy.astype(np.float32))[:,:,:3],
                         torch.from_numpy(depth),\
@@ -209,8 +188,8 @@ class YCB(Backend):
             h_render ([torch.tensor torch.float32]): 4,4
             h_init ([torch.tensor torch.float32]): 4,4
         """ 
-        h = self.h
-        w = self.w
+        h = self._h
+        w = self._w
 
         st = time.time()
         if not  ( h_real_est is None ): 
@@ -281,12 +260,16 @@ class YCB(Backend):
             torch.float32), scale=True, mode="nearest").type(torch.int32)
 
         #get flow
-        flow = self.get_flow(h_render[0].numpy(), h_gt, obj_idx, label, cam_flag, b_real, b_ren )
+        if self._cfg_d['flow_cfg'].get('fast', True):
+            flow = self._get_flow_fast(h_render[0].numpy(), h_gt, obj_idx, label, cam_flag, b_real, b_ren, K_real)
+        else:
+            flow = self._get_flow(h_render[0].numpy(), h_gt, obj_idx, label, cam_flag, b_real, b_ren )
+        
         if type( flow ) is bool: 
             if self.err:
                 print("Flow calc failed")
             return False
-        
+   
         u_cropped = b_real.crop( torch.from_numpy( flow[0][:,:,None] ).type(
             torch.float32), scale=True, mode="bilinear").numpy()
         v_cropped =  b_real.crop(  torch.from_numpy( flow[1][:,:,None]).type(
@@ -302,14 +285,14 @@ class YCB(Backend):
         nr2 = np.full((h,w), float(real_tl[1])  , dtype=np.float32)
         nr3 = np.full((h,w), float(ren_tl[1]) , dtype=np.float32 )
         nr4 = np.full((h,w), float(w/ren_w) , dtype=np.float32 )
-        # v_cropped_scaled = (self.grid_y -((np.multiply((( np.divide( self.grid_y , nr1)+nr2) +(v_cropped[:,:,0]).astype(np.long)) - nr3 , nr4)).astype(np.long))).astype(np.long)
-        v_cropped_scaled = (self.grid_y.astype(np.float32) -((np.multiply((( np.divide( self.grid_y.astype(np.float32) , nr1)+nr2) +(v_cropped[:,:,0])) - nr3 , nr4))))
+        # v_cropped_scaled = (self._grid_y -((np.multiply((( np.divide( self._grid_y , nr1)+nr2) +(v_cropped[:,:,0]).astype(np.long)) - nr3 , nr4)).astype(np.long))).astype(np.long)
+        v_cropped_scaled = (self._grid_y.astype(np.float32) -((np.multiply((( np.divide( self._grid_y.astype(np.float32) , nr1)+nr2) +(v_cropped[:,:,0])) - nr3 , nr4))))
         
         nr1 = np.full((h,w), float( h/real_h) , dtype=np.float32)
         nr2 = np.full((h,w), float( real_tl[0]) , dtype=np.float32)
         nr3 = np.full((h,w), float(ren_tl[0]) , dtype=np.float32)
         nr4 = np.full((h,w), float(h/ren_h) , dtype=np.float32)
-        u_cropped_scaled = self.grid_x.astype(np.float32) -(np.round((((self.grid_x.astype(np.float32) /nr1)+nr2) +np.round(u_cropped[:,:,0]))-nr3)*(nr4))
+        u_cropped_scaled = self._grid_x.astype(np.float32) -(np.round((((self._grid_x.astype(np.float32) /nr1)+nr2) +np.round(u_cropped[:,:,0]))-nr3)*(nr4))
 
         if self._cfg_d['output_cfg'].get('color_jitter_render', {}).get('active', False):
             render_img = self._color_jitter_render( render_img.permute(2,0,1) ).permute(1,2,0).type(torch.float32)
@@ -331,13 +314,12 @@ class YCB(Backend):
                 torch.from_numpy( h_init ).type(torch.float32),
                 torch.from_numpy(h_gt).type(torch.float32),
                 torch.from_numpy(K_real.astype(np.float32)))   
-        if self.visu: 
+        if self._cfg_d['output_cfg']['visu']['status']: 
             tup += (img_ren[0], depth_ren[0])
 
         return tup
 
-
-    def get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
+    def _get_flow(self, h_render, h_real, idx, label_img, cam, b_real, b_ren):
         st___ = time.time()
         f_1 = label_img == int( idx)
         
@@ -346,11 +328,11 @@ class YCB(Backend):
             # to little of the object is visible 
             return False
         st = time.time()
-        m_real = copy.deepcopy(self.mesh[idx])
-        m_render = copy.deepcopy(self.mesh[idx])
+        m_real = copy.deepcopy(self._mesh[idx])
+        m_render = copy.deepcopy(self._mesh[idx])
 
-        m_real = self.transform_mesh(m_real, h_real)
-        m_render = self.transform_mesh(m_render, h_render)
+        m_real = transform_mesh(m_real, h_real)
+        m_render = transform_mesh(m_render, h_render)
 
         rmi_real = RayMeshIntersector(m_real)
         rmi_render = RayMeshIntersector(m_render)
@@ -361,17 +343,17 @@ class YCB(Backend):
         sub = self._cfg_d.get('flow_cfg', {}).get('sub',2)
 
         tl, br = b_real.limit_bb()
-        h_idx_real = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
-        w_idx_real = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+        h_idx_real = np.reshape( self._grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+        w_idx_real = np.reshape( self._grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
 
-        rays_origin_real = self.rays_origin_real[cam]  [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
-        rays_dir_real =self.rays_dir[cam] [int(tl[0]) : int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        rays_origin_real = self._rays_origin_real[cam]  [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        rays_dir_real =self._rays_dir[cam] [int(tl[0]) : int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
         
         tl, br = b_ren.limit_bb()
-        rays_origin_render = self.rays_origin_real[0] [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
-        rays_dir_render = self.rays_dir[0] [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
-        h_idx_render = np.reshape( self.grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
-        w_idx_render = np.reshape( self.grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+        rays_origin_render = self._rays_origin_real[0] [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        rays_dir_render = self._rays_dir[0] [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        h_idx_render = np.reshape( self._grid_x [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
+        w_idx_render = np.reshape( self._grid_y [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub], (-1) ) 
 
         st_ = time.time()
         # ray traceing
@@ -384,11 +366,11 @@ class YCB(Backend):
         # b = np.reshape( a, rays_origin_render.shape )
 
         # tl, br = b_real.limit_bb()
-        # c1 = np.zeros ( self.grid_x.shape ) - 1 
+        # c1 = np.zeros ( self._grid_x.shape ) - 1 
         # c1 [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]  = np.reshape ( real_res_mesh_id  , (rays_origin_real.shape[0], rays_origin_real.shape[1]) )
 
         # tl, br = b_ren.limit_bb()
-        # c2 = np.zeros ( self.grid_x.shape ) - 1 
+        # c2 = np.zeros ( self._grid_x.shape ) - 1 
         # c2 [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]  = np.reshape ( render_res_mesh_id  , (rays_origin_render.shape[0], rays_origin_render.shape[1]) )
 
 
@@ -405,11 +387,11 @@ class YCB(Backend):
   
         real_res_mesh_id.shape[0] 
 
-        disparity_pixels = np.zeros((self.h,self.w,2))-999
+        disparity_pixels = np.zeros((self._h,self._w,2))-999
         matches = 0
         i = 0
         idx_pre = np.random.permutation( np.arange(0,real_res_mesh_id.shape[0]) ).astype(np.long)
-        while matches < self.max_matches and i < self.max_iterations and i < real_res_mesh_id.shape[0]:
+        while matches < self._max_matches and i < self._max_iterations and i < real_res_mesh_id.shape[0]:
             r_id = idx_pre[i]
             mesh_id = int(  real_res_mesh_id [r_id] )
             s = np.where(  render_res_mesh_id == mesh_id ) 
@@ -439,13 +421,13 @@ class YCB(Backend):
         points = np.stack( [np.array(points[0]), np.array( points[1]) ], axis=1)
         
         min_matches = self._cfg_d.get('flow_cfg', {}).get('min_matches',50)
-        if matches < 50 or np.sum(f_3) < min_matches: 
+        if np.sum(f_3) < min_matches: 
             # print(f'not enough matches{matches}, F3 {np.sum(f_3)}, REAL {h_idx_real.shape}')
             # print(render_res, rays_dir_render2.shape, rays_origin_render2.shape )
             return False
         
-        u_map = griddata(points, disparity_pixels[f_3][:,0], (self.grid_x, self.grid_y), method='nearest')
-        v_map = griddata(points, disparity_pixels[f_3][:,1], (self.grid_x, self.grid_y), method='nearest')
+        u_map = griddata(points, disparity_pixels[f_3][:,0], (self._grid_x, self._grid_y), method='nearest')
+        v_map = griddata(points, disparity_pixels[f_3][:,1], (self._grid_x, self._grid_y), method='nearest')
 
         dil_kernel_size = self._cfg_d.get('flow_cfg', {}).get('dil_kernel_size',2)
         inp = np.uint8( f_3*255 ) 
@@ -468,7 +450,58 @@ class YCB(Backend):
         
         return u_map, v_map, valid_flow_mask, torch.tensor( real_tl, dtype=torch.int32) , torch.tensor( real_br, dtype=torch.int32) , torch.tensor( ren_tl, dtype=torch.int32) , torch.tensor( ren_br, dtype=torch.int32 ) 
 
-    def get_desig(self, path):
+    def _get_flow_fast(self, h_render, h_real, idx, label_img, cam, b_real, b_ren, K_real):
+        m_real = copy.deepcopy(self._mesh[idx])
+        m_real = transform_mesh(m_real, h_real)
+
+        rmi_real = RayMeshIntersector(m_real)
+        sub = 1
+        tl, br = b_real.limit_bb()
+
+        rays_origin_real = self._rays_origin_real[cam]  [int(tl[0]): int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        rays_dir_real = self._rays_dir[cam] [int(tl[0]) : int(br[0]), int(tl[1]): int(br[1])][::sub,::sub]
+        
+        real_locations, real_index_ray, real_res_mesh_id = rmi_real.intersects_location(ray_origins=np.reshape( rays_origin_real, (-1,3) ) , 
+            ray_directions=np.reshape(rays_dir_real, (-1,3)),multiple_hits=False)
+
+        
+        h_trafo =h_render @ np.linalg.inv( h_real )
+        ren_locations = (real_locations @ h_trafo[:3,:3].T) + h_trafo[:3,3]
+
+        uv_ren = backproject_points_np(ren_locations, K=self.K_ren)
+        uv_real =  backproject_points_np(real_locations, K=K_real) 
+        dis = uv_ren-uv_real
+        
+        uv_real = np.uint32(uv_real)
+        idx = np.uint32(uv_real[:,0]*(self._w) + uv_real[:,1]) 
+        disparity_pixels = np.zeros((self._h,self._w,2))-999
+        disparity_pixels = np.reshape( disparity_pixels, (-1,2) )
+        disparity_pixels[idx] = dis
+        disparity_pixels = np.reshape( disparity_pixels, (self._h,self._w,2) )
+        
+        f_3 = disparity_pixels[:,:,0] != -999
+            
+        u_map = disparity_pixels[:,:,0]
+        v_map = disparity_pixels[:,:,1]
+        u_map = fill( u_map, u_map == -999 )
+        v_map = fill( v_map, v_map == -999 )
+    
+        real_tl = np.zeros( (2) )
+        real_tl[0] = int(b_real.tl[0])
+        real_tl[1] = int(b_real.tl[1])
+        real_br = np.zeros( (2) )
+        real_br[0] = int(b_real.br[0])
+        real_br[1] = int(b_real.br[1])
+        ren_tl = np.zeros( (2) )
+        ren_tl[0] = int(b_ren.tl[0])
+        ren_tl[1] = int(b_ren.tl[1])
+        ren_br = np.zeros( (2) )
+        ren_br[0] = int( b_ren.br[0] )
+        ren_br[1] = int( b_ren.br[1] )
+        
+        return u_map, v_map, f_3, torch.tensor( real_tl, dtype=torch.int32) , torch.tensor( real_br, dtype=torch.int32) , torch.tensor( ren_tl, dtype=torch.int32) , torch.tensor( ren_br, dtype=torch.int32 ) 
+
+    def _get_desig(self, path):
         desig = []
         with open(path) as f:
             for line in f:
@@ -478,7 +511,7 @@ class YCB(Backend):
                     desig.append(line)
         return desig
 
-    def convert_desig_to_batch_list(self, desig, lookup_desig_to_obj):
+    def _convert_desig_to_batch_list(self, desig, lookup_desig_to_obj):
         """ only works without sequence setting """
         if self._cfg_d['batch_list_cfg']['seq_length'] == 1:
             seq_list = []
@@ -597,9 +630,9 @@ class YCB(Backend):
         crop = transforms.CenterCrop((h, w))
         img = crop(img)
         img = img.resize((w_g, h_g))
-        return np.array(self._trancolor(img))
+        return np.array(self._trancolor_background(img))
 
-    def get_batch_list(self):
+    def _get_batch_list(self):
         """create batch list based on cfg"""
         lookup_arr = np.load(
             self._cfg_env['p_ycb_lookup_desig_to_obj'], allow_pickle=True)
@@ -611,29 +644,29 @@ class YCB(Backend):
             lookup_dict[lookup_arr[i, 0]] = lookup_arr[i, 1]
 
         if self._cfg_d['batch_list_cfg']['mode'] == 'dense_fusion_test':
-            desig_ls = self.get_desig(self._cfg_env['p_ycb_dense_test'])
+            desig_ls = self._get_desig(self._cfg_env['p_ycb_dense_test'])
             self._cfg_d['batch_list_cfg']['fixed_length'] = True
             self._cfg_d['batch_list_cfg']['seq_length'] = 1
 
         elif self._cfg_d['batch_list_cfg']['mode'] == 'dense_fusion_train':
-            desig_ls = self.get_desig(self._cfg_env['p_ycb_dense_train'])
+            desig_ls = self._get_desig(self._cfg_env['p_ycb_dense_train'])
             self._cfg_d['batch_list_cfg']['fixed_length'] = True
             self._cfg_d['batch_list_cfg']['seq_length'] = 1
 
         elif self._cfg_d['batch_list_cfg']['mode'] == 'train':
-            desig_ls = self.get_desig(self._cfg_env['p_ycb_seq_train'])
+            desig_ls = self._get_desig(self._cfg_env['p_ycb_seq_train'])
 
         elif self._cfg_d['batch_list_cfg']['mode'] == 'train_inc_syn':
-            desig_ls = self.get_desig(self._cfg_env['p_ycb_seq_train_inc_syn'])
+            desig_ls = self._get_desig(self._cfg_env['p_ycb_seq_train_inc_syn'])
 
         elif self._cfg_d['batch_list_cfg']['mode'] == 'test':
-            desig_ls = self.get_desig(self._cfg_env['p_ycb_seq_test'])
+            desig_ls = self._get_desig(self._cfg_env['p_ycb_seq_test'])
         else:
             raise AssertionError
 
         # this is needed to add noise during runtime
-        self._syn = self.get_desig(self._cfg_env['p_ycb_syn'])
-        self._real = self.get_desig(self._cfg_env['p_ycb_seq_train'])
+        self._syn = self._get_desig(self._cfg_env['p_ycb_syn'])
+        self._real = self._get_desig(self._cfg_env['p_ycb_seq_train'])
         name = str(self._cfg_d['batch_list_cfg'])
         name = name.replace("""'""", '')
         name = name.replace(" ", '')
@@ -647,7 +680,7 @@ class YCB(Backend):
             with open(name, 'rb') as f:
                 batch_ls = pickle.load(f)
         except:
-            batch_ls = self.convert_desig_to_batch_list(desig_ls, lookup_dict)
+            batch_ls = self._convert_desig_to_batch_list(desig_ls, lookup_dict)
 
             pickle.dump(batch_ls, open(name, "wb"))
         return batch_ls
@@ -681,39 +714,30 @@ class YCB(Backend):
             else:
                 return np.array([cx_1, cy_1, fx_1, fy_1])
             
-    def load_flow(self):
-        self.load_rays_dir() 
-        self.load_meshes()
+    def _load_flow(self):
+        self._load_rays_dir() 
+        self._load_meshes()
 
-        self.max_matches = self._cfg_d.get('flow_cfg', {}).get('max_matches',1500)
-        self.max_iterations =  self._cfg_d.get('flow_cfg', {}).get('max_iterations',10000)
-        self.grid_x, self.grid_y = np.mgrid[0:self.h, 0:self.w]
+        self._max_matches = self._cfg_d.get('flow_cfg', {}).get('max_matches',1500)
+        self._max_iterations =  self._cfg_d.get('flow_cfg', {}).get('max_iterations',10000)
+        self._grid_x, self._grid_y = np.mgrid[0:self._h, 0:self._w]
 
-    def transform_mesh(self, mesh, H):
-        """ directly operates on mesh and does not create a copy!"""
-        t = np.ones((mesh.vertices.shape[0],4)) 
-        t[:,:3] = mesh.vertices
-        H[:3,:3] = H[:3,:3]
-        mesh.vertices = (t @ H.T)[:,:3]
-        return mesh
-        
-    def load_rays_dir(self): 
+    def _load_rays_dir(self): 
         K1 = self.get_camera('data_syn/000001', K=True)
         K2 = self.get_camera('data/0068/000001',  K=True)
         
-        self.nr_to_image_plane = np.zeros((self.h*self.w,2), dtype=np.float)
-        self.rays_origin_real = []
-        self.rays_origin_render = []
-        self.rays_dir = []
+        self._rays_origin_real = []
+        self._rays_origin_render = []
+        self._rays_dir = []
         
         for K in [K1,K2]:
-            u_cor = np.arange(0,self.h,1)
-            v_cor = np.arange(0,self.w,1)
+            u_cor = np.arange(0,self._h,1)
+            v_cor = np.arange(0,self._w,1)
             K_inv = np.linalg.inv(K)
-            rays_dir = np.zeros((self.w,self.h,3))
+            rays_dir = np.zeros((self._w,self._h,3))
             nr = 0
-            rays_origin_render = np.zeros((self.w,self.h,3))
-            rays_origin_real = np.zeros((self.w,self.h,3))
+            rays_origin_render = np.zeros((self._w,self._h,3))
+            rays_origin_real = np.zeros((self._w,self._h,3))
             for u in v_cor:
                 for v in u_cor:
                     n = K_inv @ np.array([u,v, 1])
@@ -721,28 +745,26 @@ class YCB(Backend):
                     rays_dir[u,v,:] = n * 0.6 - n * 0.25                     
                     rays_origin_render[u,v,:] = n * 0.1
                     rays_origin_real[u,v,:] =  n * 0.25
-                    self.nr_to_image_plane[nr, 0] = u
-                    self.nr_to_image_plane[nr, 1] = v
                     nr += 1
             rays_origin_render 
-            self.rays_origin_real.append( np.swapaxes(rays_origin_real,0,1) )
-            self.rays_origin_render.append( np.swapaxes(rays_origin_render,0,1) )
-            self.rays_dir.append( np.swapaxes( rays_dir,0,1) )
+            self._rays_origin_real.append( np.swapaxes(rays_origin_real,0,1) )
+            self._rays_origin_render.append( np.swapaxes(rays_origin_render,0,1) )
+            self._rays_dir.append( np.swapaxes( rays_dir,0,1) )
 
-    def load_meshes(self):
+    def _load_meshes(self):
         st = time.time()
         p = self._p_ycb + '/models'
         cad_models = [str(p) for p in Path(p).rglob('*scaled.obj')] #textured
-        self.mesh = {}
+        self._mesh = {}
         for pa in cad_models:
             try:
                 idx = self._name_to_idx[pa.split('/')[-2]]
-                self.mesh[ idx ] = trimesh.load(pa)
+                self._mesh[ idx ] = trimesh.load(pa)
             except:
                 pass
         # print(f'Finished loading meshes {time.time()-st}')
 
-    def get_pcd_cad_models(self):
+    def _get_pcd_cad_models(self):
         p = self._cfg_env['p_ycb_obj']
         class_file = open(p)
         cad_paths = []
@@ -806,6 +828,14 @@ class YCB(Backend):
         self._cfg_d['output_cfg']['refine'] = refine
 
 
+def transform_mesh(mesh, H):
+    """ directly operates on mesh and does not create a copy!"""
+    t = np.ones((mesh.vertices.shape[0],4)) 
+    t[:,:3] = mesh.vertices
+    H[:3,:3] = H[:3,:3]
+    mesh.vertices = (t @ H.T)[:,:3]
+    return mesh
+
 def rel_h (h1,h2):
     'Input numpy arrays'
     from pytorch3d.transforms import so3_relative_angle
@@ -820,3 +850,35 @@ def add_noise(h, nt = 0.01, nr= 30):
             break
     h_noise[:3,3] = np.random.normal(loc=h[:3,3], scale=nt)
     return h_noise
+
+def fill(data, invalid=None):
+    """
+    Replace the value of invalid 'data' cells (indicated by 'invalid') 
+    by the value of the nearest valid data cell
+
+    Input:
+        data:    numpy array of any dimension
+        invalid: a binary array of same shape as 'data'. True cells set where data
+                 value should be replaced.
+                 If None (default), use: invalid  = np.isnan(data)
+
+    Output: 
+        Return a filled array. 
+    """
+    if invalid is None: invalid = np.isnan(data)
+    ind = nd.distance_transform_edt(invalid, return_distances=False, return_indices=True)
+    return data[tuple(ind)]
+
+def backproject_points_np(p, fx=None, fy=None, cx=None, cy=None, K=None):
+    """
+    p.shape = (nr_points,xyz)
+    """
+    if not K is None:
+        fx = K[0,0]
+        fy = K[1,1]
+        cx = K[0,2]
+        cy = K[1,2]
+    # true_divide
+    u = ((p[:, 0] / p[:, 2]) * fx) + cx
+    v = ((p[:, 1] / p[:, 2]) * fy) + cy
+    return np.stack([v, u]).T  

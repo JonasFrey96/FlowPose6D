@@ -1,4 +1,4 @@
-model_path: /media/scratch1/jonfrey/models/runs/debug_24h_not_working/debug
+model_path: /media/scratch1/jonfrey/models/runs/debug_24h_not_working/debug/_
 checkpoint_restore: false
 checkpoint_load: /cluster/work/riner/users/PLR-2020/jonfrey/models/runs/flow-final-report/2020-11-14T21:32:25_connections_5_5-pyramid-L2/epoch=9-avg_val_disparity_float=41.4712.ckpt
 model_mode: fit
@@ -54,16 +54,16 @@ trainer:
   gpus: -1
   num_sanity_val_steps: 0
 visu:
-  number_images_log_train: 2
-  number_images_log_test: 2
-  number_images_log_val: 2
+  number_images_log_train: 0
+  number_images_log_test: 0
+  number_images_log_val: 0
   log_to_file: false
   always_calculate: false
   full_val: false
 early_stopping_cfg:
   patience: 100
 loader:
-  batch_size: 4
+  batch_size: 8
   num_workers: 4
   shuffle: true
   pin_memory: true
@@ -73,8 +73,7 @@ d_test:
   num_points: 1000
   num_pt_mesh_small: 2300
   num_pt_mesh_large: 2300
-  obj_list_fil:
-  - 2
+  obj_list_fil: null
   obj_list_sym:
   - 12
   - 15
@@ -86,7 +85,7 @@ d_test:
     seq_length: 1
     fixed_length: true
     sub_sample: 1
-    mode: dense_fusion_test
+    mode: dense_fusion_train
     add_syn_to_train: false
   noise_cfg:
     status: false
@@ -98,11 +97,12 @@ d_test:
     min_vis_size: 200
     max_matches: 10000
     max_iterations: 10000
+    fast: True
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.01
-    noise_rotation: 10
+    noise_translation: 0.03
+    noise_rotation: 40
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false
@@ -153,17 +153,18 @@ d_train:
     status: false
     noise_trans: 0
   flow_cfg:
-    sub: 2
+    sub: 4
     min_matches: 50
     dil_kernel_size: 2
     min_vis_size: 200
     max_matches: 2000
     max_iterations: 10000
+    fast: True
   output_cfg:
     overfitting_nr_idx: -1
     vm_in_dataloader: true
-    noise_translation: 0.01
-    noise_rotation: 10
+    noise_translation: 0.03
+    noise_rotation: 50
     return_same_size_tensors: true
     force_one_object_visible: true
     status: false

@@ -135,7 +135,10 @@ class BoundingBox():
             res = img_pad[ int(max_height+self.tl[0]) : int(max_height+self.br[0]), int(max_width+self.tl[1]) : int(max_width+self.br[1])] # H W C
         if scale:
             res = res.permute(2,0,1)[None] #BS C H W
-            res  = torch.nn.functional.interpolate(res, size=(480,640), mode=mode)  
+            if mode == 'bilinear':
+                res  = torch.nn.functional.interpolate(res, size=(480,640), mode=mode, align_corners=False)  
+            else:
+                res  = torch.nn.functional.interpolate(res, size=(480,640), mode=mode)  
             res = res[0].permute(1,2,0) # H W C
             
         return res
@@ -200,7 +203,7 @@ class BoundingBox():
 def get_bb_from_depth(depth):
     bb_lsd = []
     for d in depth:
-        masked_idx = (d != 0).nonzero()
+        masked_idx = torch.nonzero( d != 0, as_tuple=False)
         min1 = torch.min(masked_idx[:, 0]).type(torch.float32)
         max1 = torch.max(masked_idx[:, 0]).type(torch.float32)
         min2 = torch.min(masked_idx[:, 1]).type(torch.float32)
